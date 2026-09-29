@@ -1,0 +1,37 @@
+name: scan
+# Escáner de mercado de Albion World: cada 30 min pide a AODP todo el catálogo y publica los mejores
+# resultados en la rama `data` (un solo commit que se reescribe cada vez, para que el repo NO crezca).
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch: {}
+concurrency:
+  group: scan
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Traer los archivos publicados (si una región falla se conserva el anterior)
+        run: |
+          mkdir -p out
+          for r in americas europe asia; do
+            curl -sfL "https://raw.githubusercontent.com/${{ github.repository }}/data/$r.json" -o "out/$r.json" || rm -f "out/$r.json"
+          done
+      - run: node scan.mjs
+      - name: Publicar en la rama data (un solo commit, sin historial)
+        run: |
+          cd out
+          git init -q -b data
+          git config user.name "radar-scan"
+          git config user.email "radar-scan@users.noreply.github.com"
+          git add -A
+          git commit -q -m "scan $(date -u +%FT%TZ)"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" data
