@@ -14,6 +14,9 @@
 //   node scan.mjs                        # las 3 regiones
 //   node scan.mjs americas               # una región
 //   node scan.mjs americas --limit 400   # prueba rápida con los primeros 400 ids
+//   node scan.mjs --quick                # vuelta rápida (cada 10 min entre las completas): solo los
+//                                        # más buscados de cada servidor + lo ya publicado, mezclado
+//                                        # con la última tabla completa de precios
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,6 +58,10 @@ if (!catalog?.ids?.length) {
 const args = process.argv.slice(2);
 const regions = args.filter((a) => HOSTS[a]).length ? args.filter((a) => HOSTS[a]) : Object.keys(HOSTS);
 const limitAt = args.indexOf('--limit');
+const QUICK = args.includes('--quick');
+/** Tope de ids de la vuelta rápida (unos 8 pedidos por región). */
+const QUICK_MAX_IDS = 900;
+const FIRESTORE_DOC = 'https://firestore.googleapis.com/v1/projects/albion-world/databases/(default)/documents/searchStats';
 const ids = limitAt >= 0 ? catalog.ids.slice(0, Number(args[limitAt + 1])) : catalog.ids;
 const cityIndex = new Map(CITIES.map((c, i) => [c, i]));
 const today = () => Math.floor(Date.now() / 86400e3);
@@ -144,6 +151,47 @@ async function refreshAverages(client, state, log) {
   return { refreshed: pending.length, coverage: newCoverage };
 }
 
+/** Fila compacta que se guarda para la vuelta rápida (solo lo que usa `indexPrices`). */
+const compactRow = (r) => ({
+  item_id: r.item_id,
+  city: r.city,
+  quality: r.quality,
+  sell_price_min: r.sell_price_min,
+  sell_price_min_date: r.sell_price_min_date,
+  buy_price_max: r.buy_price_max,
+  buy_price_max_date: r.buy_price_max_date,
+});
+
+/** Más buscados de este servidor (público en Firestore; lo arma la app una vez al día). Si todavía no
+ * hay lista por servidor, usa la general. Nunca rompe la vuelta: sin lista, se sigue con lo publicado. */
+async function topSearched(region, log) {
+  for (const docId of [`top_${region}`, 'top']) {
+    try {
+      const res = await fetch(`${FIRESTORE_DOC}/${docId}`, { signal: AbortSignal.timeout(10000) });
+      if (!res.ok) continue;
+      const json = await res.json();
+      const values = json?.fields?.items?.arrayValue?.values ?? [];
+      const list = values.map((v) => v?.mapValue?.fields?.itemId?.stringValue).filter((id) => typeof id === 'string');
+      if (list.length) return list;
+    } catch (err) {
+      log(`más buscados (${docId}): ${err.message}`);
+    }
+  }
+  return [];
+}
+
+/** Ids calientes de la vuelta rápida: lo que la gente busca + lo que el Radar muestra ahora. */
+async function hotIds(region, log) {
+  const known = new Set(ids);
+  const out = new Set();
+  for (const id of await topSearched(region, log)) if (known.has(id)) out.add(id);
+  const published = readJson(path.join(OUT, `${region}.json`), null, log);
+  for (const key of ['transport', 'market', 'drops7', 'drops90', 'drops180', 'rising', 'falling', 'mostTraded', 'craft', 'refine', 'farm', 'breed']) {
+    for (const e of published?.[key] ?? []) if (typeof e?.id === 'string' && known.has(e.id)) out.add(e.id);
+  }
+  return [...out].slice(0, QUICK_MAX_IDS);
+}
+
 async function scanRegion(region) {
   const t0 = Date.now();
   const notes = [];
@@ -154,12 +202,37 @@ async function scanRegion(region) {
   const client = createClient(region);
   const state = loadState(region, log);
 
-  const { rows, failedChunks } = await client.prices(ids, log);
-  if (!rows.length) throw new Error('AODP no devolvió precios');
-  const averages = await refreshAverages(client, state, log);
-  const closedDays = flushClosedDays(region, state);
-  if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
-  writeJson(path.join(STATE, `${region}.json.gz`), state);
+  const rowsFile = path.join(STATE, `${region}-rows.json.gz`);
+  let rows;
+  let failedChunks;
+  let quickIds = 0;
+  let averages = { refreshed: 0, coverage: 0 };
+  let closedDays = 0;
+  if (QUICK) {
+    // Vuelta rápida: la tabla completa de la última vuelta de 30 min, con los ids calientes
+    // reemplazados por su precio de ahora. Sin tabla guardada (primera vuelta), no hay nada que hacer.
+    const stored = readJson(rowsFile, null, log);
+    if (!stored?.rows?.length) throw new Error('sin tabla de precios guardada: espera a la vuelta completa');
+    const hot = await hotIds(region, log);
+    const fresh = await client.prices(hot, log);
+    failedChunks = fresh.failedChunks;
+    const replaced = new Set(fresh.rows.map((r) => r.item_id));
+    rows = stored.rows.filter((r) => !replaced.has(r.item_id)).concat(fresh.rows.filter((r) => r.quality === 1).map(compactRow));
+    quickIds = hot.length;
+    averages = { refreshed: 0, coverage: ids.filter((id) => today() - (state.refreshed[id] ?? -999) <= 1).length / ids.length };
+    const fullAt = Date.parse(stored.at ?? '') || 0;
+    if (Date.now() - fullAt > 90 * 60 * 1000) log('la última vuelta completa tiene más de 90 min');
+  } else {
+    const full = await client.prices(ids, log);
+    rows = full.rows;
+    failedChunks = full.failedChunks;
+    if (!rows.length) throw new Error('AODP no devolvió precios');
+    averages = await refreshAverages(client, state, log);
+    closedDays = flushClosedDays(region, state);
+    if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
+    writeJson(path.join(STATE, `${region}.json.gz`), state);
+    writeJson(rowsFile, { v: 1, at: new Date().toISOString(), rows: rows.filter((r) => r.quality === 1).map(compactRow) });
+  }
 
   const now = Date.now();
   const index = indexPrices(rows, now);
@@ -241,6 +314,8 @@ async function scanRegion(region) {
     freshItems: [...index.values()].filter((e) => e.sells.length || e.buys.length).length,
     averageCoverage: Math.round(averages.coverage * 1000) / 10,
     averagesRefreshed: averages.refreshed,
+    mode: QUICK ? 'quick' : 'full',
+    quickIds,
     candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
     published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
     historyDaysClosed: closedDays,

@@ -81,18 +81,31 @@ jobs:
           traer data out
           traer state state
 
+          # Vuelta completa en :07 y :37 (todo el catálogo); vuelta rápida en :17, :27, :47 y :57 (los
+          # más buscados de cada servidor + lo que el Radar ya muestra, mezclado con la última tabla
+          # completa). La primera vuelta del ciclo siempre es completa.
+          MODO=full
           while [ "$SECONDS" -lt "$END" ]; do
-            if node scan.mjs; then
-              publicar state state
-              publicar data out
-              publicar_historial
+            if [ "$MODO" = full ]; then
+              if node scan.mjs; then
+                publicar state state
+                publicar data out
+                publicar_historial
+              else
+                echo "::warning::las 3 regiones fallaron en esta vuelta; se sigue con la siguiente"
+              fi
             else
-              echo "::warning::las 3 regiones fallaron en esta vuelta; se sigue con la siguiente"
+              if node scan.mjs --quick; then
+                publicar data out
+              else
+                echo "::warning::vuelta rápida sin resultado; se sigue"
+              fi
             fi
-            # Duerme hasta el próximo :07 o :37 (UTC).
+            # Duerme hasta el próximo :x7 (UTC); :07 y :37 son completas.
             MIN=$((10#$(date -u +%M))); SEC=$((10#$(date -u +%S)))
-            if [ "$MIN" -lt 7 ]; then NEXT=7; elif [ "$MIN" -lt 37 ]; then NEXT=37; else NEXT=67; fi
+            NEXT=$(( (MIN / 10) * 10 + 7 )); [ "$NEXT" -le "$MIN" ] && NEXT=$((NEXT + 10))
             WAIT=$(( (NEXT - MIN) * 60 - SEC ))
+            if [ $(( NEXT % 30 )) -eq 7 ]; then MODO=full; else MODO=quick; fi
             [ $((SECONDS + WAIT)) -ge "$END" ] && break
             sleep "$WAIT"
           done
