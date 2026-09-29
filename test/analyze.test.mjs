@@ -100,3 +100,28 @@ test('detecta marcadores de conflicto', () => {
   assert.ok(hasConflictMarkers('{\n<<<<<<< HEAD\n}'));
   assert.ok(!hasConflictMarkers('{"a":"<<<<<<<"}'));
 });
+
+test('cosecha: 9 cultivos por semilla; cría: bebé + 18 de alimento contra la venta', async () => {
+  const { farmDeals, breedDeals } = await import('../lib/analyze.mjs');
+  const farm = {
+    yieldPerSeed: 9,
+    feedUnits: 18,
+    feedId: 'T5_CABBAGE',
+    crops: [{ seed: 'T4_FARM_TURNIP_SEED', crop: 'T4_TURNIP' }],
+    animals: [{ code: 'GOAT', tier: 4, baby: 'T4_FARM_GOAT_BABY', sell: 'T4_MEAT' }],
+  };
+  const index = indexPrices(
+    [
+      row('T4_FARM_TURNIP_SEED', 'Martlock', 1000, 0),
+      row('T4_TURNIP', 'Lymhurst', 250, 200),
+      row('T5_CABBAGE', 'Thetford', 100, 0),
+      row('T4_FARM_GOAT_BABY', 'Bridgewatch', 3000, 0),
+      row('T4_MEAT', 'Caerleon', 6500, 6000),
+    ],
+    NOW,
+  );
+  assert.equal(farmDeals(index, farm, NOW).list[0].yield, 9);
+  const breed = breedDeals(index, farm, NOW).list[0];
+  assert.equal(breed.feed.q, 18);
+  assert.equal(breed.sellPrice, 6000);
+});

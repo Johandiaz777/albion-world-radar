@@ -10,11 +10,16 @@ revisa **todo el mercado** de las 3 regiones en [AODP](https://www.albion-online
 | Gangas | ciudad donde un ítem está más barato que **su propio promedio de 30 días** (todas las ciudades de todos los ítems) |
 | Crafteo | 226 recetas × T4-T8 × .0-.4, con artefactos y recursos del mismo encantamiento |
 | Refinado | 5 recursos × T4-T8 × .0-.4 (piedra solo .0), sin foco |
+| Cosecha | los 15 cultivos (9 por semilla con Premium) |
+| Cría | 44 animales/tiers (granja clásica a carne; monturas y salvajes, crecidos) |
+| Cayó fuerte | lo mismo que Gangas contra el promedio de **7 días** (`drops7`) |
 
 ## Qué publica
 
 - Rama `data`: `americas.json`, `europe.json`, `asia.json` (~70 KB c/u, formato `v: 2`) y `status.json`
   (salud por región: pedidos, reintentos, 429, filas, cobertura del promedio, candidatos, errores).
+- Rama `history`: `<region>/<fecha>.json.gz`, el precio medio de cada ítem-ciudad de cada día (~150 KB por
+  día y región). Solo se agregan archivos, nunca se reescriben: sirve para 90/180 días, tendencias y proyecciones.
 - Rama `state`: `<region>.json.gz` con el promedio de 30 días de cada ítem-ciudad. Se refresca en rotación:
   una porción en cada corrida (todo el catálogo cada ~24 h; al arrancar, 3.000 ids por corrida hasta cubrirlo).
 
@@ -29,7 +34,8 @@ archivo falta, no valida o tiene más de 2 h, vuelve a su escaneo propio de siem
 - **Escritura atómica** (temporal + rename).
 - **Fallos aislados**: cada región es otro host y corre aparte; si una falla se conserva su último archivo y
   `status.json` lo marca. Un trozo de precios perdido no tira la corrida.
-- **Límite de AODP** (180/min y 300 cada 5 min): 1 pedido cada 1,1 s por host, pedidos agrupados por largo
+- **Límite de AODP** (180/min y 300 cada 5 min, por IP): un turno compartido entre las 3 regiones (1 pedido
+  cada 1,05 s), pedidos agrupados por largo
   de URL, reintentos con espera creciente y 30 s+ ante 429.
 - **24/7**: el job vive ~5h40m y se re-lanza solo; cron cada 4 h como red de seguridad. Si el bucle muere
   enseguida no se encadena (evita un bucle de corridas).

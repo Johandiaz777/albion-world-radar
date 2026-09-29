@@ -1,4 +1,5 @@
 out/
 state/
+history/
 node_modules/
 *.tmp

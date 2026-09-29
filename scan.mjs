@@ -5,9 +5,11 @@
 //   2. Promedio de 30 días de TODAS las ciudades de TODOS los ítems, refrescado en rotación: cada
 //      corrida renueva una porción (todo el catálogo cada ~24 h; más rápido mientras falte cobertura)
 //      y lo guarda en `state/<region>.json.gz`.
-//   3. Análisis: transporte, gangas vs su promedio, crafteo (226 recetas × T4-T8 × .0-.4) y
-//      refinado (5 recursos × T4-T8 × .0-.4).
-//   4. Escribe `out/<region>.json` (lo lee la app) y `out/status.json` (salud de cada región).
+//   3. Análisis de las 6 tarjetas del Radar: transporte, gangas vs su promedio de 30 y de 7 días
+//      ("Cayó fuerte"), crafteo (226 recetas × T4-T8 × .0-.4), refinado (5 recursos × T4-T8 × .0-.4),
+//      cosecha (15 cultivos) y cría (44 animales/tiers).
+//   4. Historial diario de precios: `history/<region>/<fecha>.json.gz`, un archivo por día cerrado.
+//   5. Escribe `out/<region>.json` (lo lee la app) y `out/status.json` (salud de cada región).
 //
 //   node scan.mjs                        # las 3 regiones
 //   node scan.mjs americas               # una región
@@ -16,11 +18,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
-import { craftDeals, indexPrices, marketDeals, refineDeals, robustAverage, parseDate, transportRoutes } from './lib/analyze.mjs';
+import { breedDeals, craftDeals, farmDeals, indexPrices, marketDeals, refineDeals, robustAverage, parseDate, transportRoutes } from './lib/analyze.mjs';
 import { readJson, writeJson } from './lib/store.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, 'out');
+const HISTORY = path.join(here, 'history');
 const STATE = path.join(here, 'state');
 const BASELINE_DAYS = 30;
 const AVG_MAX_AGE_DAYS = 3; // un promedio de más de 3 días no se usa
@@ -39,11 +42,35 @@ const ids = limitAt >= 0 ? catalog.ids.slice(0, Number(args[limitAt + 1])) : cat
 const cityIndex = new Map(CITIES.map((c, i) => [c, i]));
 const today = () => Math.floor(Date.now() / 86400e3);
 
-/** Estado: { v, cursor, avg: { "<id>|<ciudad#>": [promedio, día] }, refreshed: { id: día } }. */
+/**
+ * Estado por región:
+ * - `avg`: { "<id>|<ciudad#>": [promedio 30 d, día del cálculo, promedio 7 d | 0] }
+ * - `refreshed`: { id: día } — cuándo se pidió por última vez su historial
+ * - `days`: { "YYYY-MM-DD": { "<id>|<ciudad#>": precio medio del día } } — buffer del historial diario:
+ *   un día se cierra (se escribe su archivo en `history/`) cuando ya pasaron 2 días, así todos los ids
+ *   (que se refrescan en rotación a lo largo de 24 h) alcanzaron a aportar su punto de ese día.
+ */
 function loadState(region, log) {
   const s = readJson(path.join(STATE, `${region}.json.gz`), null, log);
-  if (s?.v === 1 && s.avg && s.refreshed) return s;
-  return { v: 1, cursor: 0, avg: {}, refreshed: {} };
+  if (s?.v === 1 && s.avg && s.refreshed) return { days: {}, ...s };
+  return { v: 1, cursor: 0, avg: {}, refreshed: {}, days: {} };
+}
+
+/** Escribe los días cerrados como archivos `history/<region>/<fecha>.json.gz` (solo se agregan, nunca
+ * se reescriben) y los saca del buffer. Devuelve cuántos días cerró. */
+function flushClosedDays(region, state) {
+  const limit = new Date((today() - 2) * 86400e3).toISOString().slice(0, 10);
+  let closed = 0;
+  for (const date of Object.keys(state.days).sort()) {
+    if (date > limit) continue;
+    const file = path.join(HISTORY, region, `${date}.json.gz`);
+    if (Object.keys(state.days[date]).length) {
+      writeJson(file, { v: 1, region, date, cities: CITIES, prices: state.days[date] });
+      closed += 1;
+    }
+    delete state.days[date];
+  }
+  return closed;
 }
 
 async function refreshAverages(client, state, log) {
@@ -67,14 +94,28 @@ async function refreshAverages(client, state, log) {
     return { refreshed: 0, coverage };
   }
   const cutoff = Date.now() - BASELINE_DAYS * 86400e3;
+  const cutoff7 = Date.now() - 7 * 86400e3;
+  // Historial diario: solo el punto de AYER (el de hoy todavía cambia). Cada id se refresca una vez
+  // por día, así que durante el día X todos aportan su punto de X-1, que se cierra en X+1.
+  const yesterday = new Date((day - 1) * 86400e3).toISOString().slice(0, 10);
   for (const entry of series) {
     const ci = cityIndex.get(entry?.location);
     if (ci === undefined || typeof entry.item_id !== 'string') continue;
     const ts = entry.data?.timestamps ?? [];
-    const prices = (entry.data?.prices_avg ?? []).filter((_, k) => (parseDate(ts[k]) || 0) >= cutoff);
-    const avg = robustAverage(prices);
+    const all = entry.data?.prices_avg ?? [];
     const key = `${entry.item_id}|${ci}`;
-    if (avg) state.avg[key] = [Math.round(avg), day];
+    const in30 = [];
+    const in7 = [];
+    all.forEach((price, k) => {
+      const t = parseDate(ts[k]) || 0;
+      if (t >= cutoff) in30.push(price);
+      if (t >= cutoff7) in7.push(price);
+      const date = typeof ts[k] === 'string' ? ts[k].slice(0, 10) : '';
+      if (price > 0 && date === yesterday) (state.days[date] ??= {})[key] = Math.round(price);
+    });
+    const avg = robustAverage(in30);
+    const avg7 = robustAverage(in7);
+    if (avg) state.avg[key] = [Math.round(avg), day, avg7 ? Math.round(avg7) : 0];
     else delete state.avg[key];
   }
   for (const id of pending) state.refreshed[id] = day;
@@ -102,19 +143,25 @@ async function scanRegion(region) {
   const { rows, failedChunks } = await client.prices(ids, log);
   if (!rows.length) throw new Error('AODP no devolvió precios');
   const averages = await refreshAverages(client, state, log);
+  const closedDays = flushClosedDays(region, state);
+  if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
   writeJson(path.join(STATE, `${region}.json.gz`), state);
 
   const now = Date.now();
   const index = indexPrices(rows, now);
   const day = today();
-  const avgOf = (id, city) => {
+  const avgOf = (slot) => (id, city) => {
     const hit = state.avg[`${id}|${cityIndex.get(city)}`];
-    return hit && day - hit[1] <= AVG_MAX_AGE_DAYS ? hit[0] : null;
+    return hit && day - hit[1] <= AVG_MAX_AGE_DAYS ? hit[slot] || null : null;
   };
   const transport = transportRoutes(index, now);
-  const market = marketDeals(index, avgOf, now);
+  const market = marketDeals(index, avgOf(0), now);
+  // "Cayó fuerte" de 7 días: lo mismo contra el promedio de la última semana.
+  const drops7 = marketDeals(index, avgOf(2), now);
   const craft = craftDeals(index, catalog.recipes, catalog.craftReturnRate, now);
   const refine = refineDeals(index, catalog.refining, now);
+  const farm = farmDeals(index, catalog.farm, now);
+  const breed = breedDeals(index, catalog.farm, now);
 
   const payload = {
     v: 2,
@@ -125,8 +172,11 @@ async function scanRegion(region) {
     cities: CITIES.length,
     transport: transport.list,
     market: market.list,
+    drops7: drops7.list,
     craft: craft.list,
     refine: refine.list,
+    farm: farm.list,
+    breed: breed.list,
   };
   const bytes = writeJson(path.join(OUT, `${region}.json`), payload);
   const status = {
@@ -142,8 +192,9 @@ async function scanRegion(region) {
     freshItems: [...index.values()].filter((e) => e.sells.length || e.buys.length).length,
     averageCoverage: Math.round(averages.coverage * 1000) / 10,
     averagesRefreshed: averages.refreshed,
-    candidates: { transport: transport.candidates, market: market.candidates, craft: craft.candidates, refine: refine.candidates },
-    published: { transport: transport.list.length, market: market.list.length, craft: craft.list.length, refine: refine.list.length },
+    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
+    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
+    historyDaysClosed: closedDays,
     outputKB: Math.round(bytes / 102.4) / 10,
     notes: notes.slice(-10),
   };

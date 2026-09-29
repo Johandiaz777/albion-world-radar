@@ -63,6 +63,21 @@ jobs:
             ) || echo "::warning::push de $1 falló; se reintenta en la próxima vuelta"
           }
 
+          # Historial diario: rama `history` que SOLO agrega archivos (uno por día y región, ~150 KB),
+          # con commits normales. Un solo escritor (grupo de concurrencia), así que el push siempre
+          # avanza sin pull ni rebase; si alguna vez lo rechazan, se reintenta en la próxima vuelta.
+          rm -rf history
+          if ! git clone -q --depth 1 -b history "$REPO_URL" history 2>/dev/null; then
+            mkdir -p history && git -C history init -q -b history
+          fi
+          git -C history config user.name "radar-scan"
+          git -C history config user.email "radar-scan@users.noreply.github.com"
+          publicar_historial() {
+            if [ -n "$(git -C history status --porcelain)" ]; then
+              git -C history add -A               && git -C history commit -q -m "historial $(date -u +%F)"               && git -C history push -q "$REPO_URL" HEAD:history               || echo "::warning::push del historial falló; se reintenta en la próxima vuelta"
+            fi
+          }
+
           traer data out
           traer state state
 
@@ -70,6 +85,7 @@ jobs:
             if node scan.mjs; then
               publicar state state
               publicar data out
+              publicar_historial
             else
               echo "::warning::las 3 regiones fallaron en esta vuelta; se sigue con la siguiente"
             fi
