@@ -1,0 +1,10 @@
+{
+  "name": "albion-world-radar",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "scan": "node scan.mjs",
+    "test": "node --test test/analyze.test.mjs"
+  }
+}
