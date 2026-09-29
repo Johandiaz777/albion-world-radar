@@ -18,7 +18,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
-import { breedDeals, craftDeals, farmDeals, indexPrices, marketDeals, refineDeals, robustAverage, parseDate, transportRoutes } from './lib/analyze.mjs';
+import {
+  breedDeals,
+  craftDeals,
+  farmDeals,
+  indexPrices,
+  marketDeals,
+  mostTraded,
+  parseDate,
+  refineDeals,
+  robustAverage,
+  seriesStats,
+  transportRoutes,
+  trendMovers,
+} from './lib/analyze.mjs';
 import { readJson, writeJson } from './lib/store.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +39,9 @@ const OUT = path.join(here, 'out');
 const HISTORY = path.join(here, 'history');
 const STATE = path.join(here, 'state');
 const BASELINE_DAYS = 30;
+// La API guarda el precio diario de cada ítem por meses: se piden 180 días en la misma rotación, así
+// "Cayó fuerte" de 90/180 días, tendencias y proyecciones existen desde el primer día.
+const HISTORY_DAYS = 180;
 const AVG_MAX_AGE_DAYS = 3; // un promedio de más de 3 días no se usa
 const RUNS_PER_DAY = 48; // cada 30 min
 const BOOTSTRAP_SLICE = 3000; // ids por corrida mientras falte cobertura
@@ -44,7 +60,9 @@ const today = () => Math.floor(Date.now() / 86400e3);
 
 /**
  * Estado por región:
- * - `avg`: { "<id>|<ciudad#>": [promedio 30 d, día del cálculo, promedio 7 d | 0] }
+ * - `avg`: { "<id>|<ciudad#>": [prom. 30 d, día del cálculo, prom. 7 d, prom. 90 d, prom. 180 d,
+ *          tendencia % (14 d contra los 14 anteriores), unidades vendidas en 7 d, proyección a 7 d] }
+ *   (0 = sin dato suficiente)
  * - `refreshed`: { id: día } — cuándo se pidió por última vez su historial
  * - `days`: { "YYYY-MM-DD": { "<id>|<ciudad#>": precio medio del día } } — buffer del historial diario:
  *   un día se cierra (se escribe su archivo en `history/`) cuando ya pasaron 2 días, así todos los ids
@@ -88,13 +106,11 @@ async function refreshAverages(client, state, log) {
   if (!pending.length) return { refreshed: 0, coverage };
   let series = [];
   try {
-    series = await client.history(pending, BASELINE_DAYS);
+    series = await client.history(pending, HISTORY_DAYS);
   } catch (err) {
     log(`historial: ${err.message} (se reintenta en la próxima corrida)`);
     return { refreshed: 0, coverage };
   }
-  const cutoff = Date.now() - BASELINE_DAYS * 86400e3;
-  const cutoff7 = Date.now() - 7 * 86400e3;
   // Historial diario: solo el punto de AYER (el de hoy todavía cambia). Cada id se refresca una vez
   // por día, así que durante el día X todos aportan su punto de X-1, que se cierra en X+1.
   const yesterday = new Date((day - 1) * 86400e3).toISOString().slice(0, 10);
@@ -102,20 +118,17 @@ async function refreshAverages(client, state, log) {
     const ci = cityIndex.get(entry?.location);
     if (ci === undefined || typeof entry.item_id !== 'string') continue;
     const ts = entry.data?.timestamps ?? [];
-    const all = entry.data?.prices_avg ?? [];
+    const prices = entry.data?.prices_avg ?? [];
+    const counts = entry.data?.item_count ?? [];
     const key = `${entry.item_id}|${ci}`;
-    const in30 = [];
-    const in7 = [];
-    all.forEach((price, k) => {
-      const t = parseDate(ts[k]) || 0;
-      if (t >= cutoff) in30.push(price);
-      if (t >= cutoff7) in7.push(price);
-      const date = typeof ts[k] === 'string' ? ts[k].slice(0, 10) : '';
-      if (price > 0 && date === yesterday) (state.days[date] ??= {})[key] = Math.round(price);
+    const points = [];
+    ts.forEach((raw, k) => {
+      const t = parseDate(raw);
+      if (Number.isFinite(t) && prices[k] > 0) points.push({ t, price: prices[k], count: counts[k] ?? 0 });
+      if (prices[k] > 0 && typeof raw === 'string' && raw.slice(0, 10) === yesterday) (state.days[yesterday] ??= {})[key] = Math.round(prices[k]);
     });
-    const avg = robustAverage(in30);
-    const avg7 = robustAverage(in7);
-    if (avg) state.avg[key] = [Math.round(avg), day, avg7 ? Math.round(avg7) : 0];
+    const st = seriesStats(points, Date.now());
+    if (st.avg30) state.avg[key] = [st.avg30, day, st.avg7, st.avg90, st.avg180, st.trendPct, st.volume7, st.projection7];
     else delete state.avg[key];
   }
   for (const id of pending) state.refreshed[id] = day;
@@ -154,10 +167,19 @@ async function scanRegion(region) {
     const hit = state.avg[`${id}|${cityIndex.get(city)}`];
     return hit && day - hit[1] <= AVG_MAX_AGE_DAYS ? hit[slot] || null : null;
   };
+  /** Estadísticas vigentes por ítem-ciudad, para tendencias y "más movidos". */
+  const statsOf = (id, city) => {
+    const hit = state.avg[`${id}|${cityIndex.get(city)}`];
+    return hit && day - hit[1] <= AVG_MAX_AGE_DAYS ? { avg30: hit[0], trendPct: hit[5] ?? 0, volume7: hit[6] ?? 0, projection7: hit[7] ?? 0 } : null;
+  };
   const transport = transportRoutes(index, now);
   const market = marketDeals(index, avgOf(0), now);
   // "Cayó fuerte" de 7 días: lo mismo contra el promedio de la última semana.
   const drops7 = marketDeals(index, avgOf(2), now);
+  const drops90 = marketDeals(index, avgOf(3), now);
+  const drops180 = marketDeals(index, avgOf(4), now);
+  const trends = trendMovers(index, statsOf, CITIES);
+  const traded = mostTraded(index, statsOf, CITIES);
   const craft = craftDeals(index, catalog.recipes, catalog.craftReturnRate, now);
   const refine = refineDeals(index, catalog.refining, now);
   const farm = farmDeals(index, catalog.farm, now);
@@ -173,12 +195,34 @@ async function scanRegion(region) {
     transport: transport.list,
     market: market.list,
     drops7: drops7.list,
+    drops90: drops90.list,
+    drops180: drops180.list,
+    rising: trends.rising,
+    falling: trends.falling,
+    mostTraded: traded.list,
     craft: craft.list,
     refine: refine.list,
     farm: farm.list,
     breed: breed.list,
   };
   const bytes = writeJson(path.join(OUT, `${region}.json`), payload);
+  // Resumen para la pantalla del Radar: lo mejor de cada tarjeta (~3 KB). La lista completa solo se
+  // baja al tocar "Ver más" o "Cayó fuerte".
+  const firsts = (list, n = 3) => list.slice(0, n);
+  writeJson(path.join(OUT, `${region}-top.json`), {
+    v: 2,
+    region,
+    generatedAt: payload.generatedAt,
+    baselineDays: BASELINE_DAYS,
+    items: ids.length,
+    cities: CITIES.length,
+    transport: firsts(payload.transport),
+    market: firsts(payload.market),
+    craft: firsts(payload.craft),
+    refine: firsts(payload.refine),
+    farm: firsts(payload.farm),
+    breed: firsts(payload.breed),
+  });
   const status = {
     ok: true,
     at: payload.generatedAt,
@@ -192,8 +236,8 @@ async function scanRegion(region) {
     freshItems: [...index.values()].filter((e) => e.sells.length || e.buys.length).length,
     averageCoverage: Math.round(averages.coverage * 1000) / 10,
     averagesRefreshed: averages.refreshed,
-    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
-    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
+    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
+    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
     historyDaysClosed: closedDays,
     outputKB: Math.round(bytes / 102.4) / 10,
     notes: notes.slice(-10),

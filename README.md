@@ -12,15 +12,19 @@ revisa **todo el mercado** de las 3 regiones en [AODP](https://www.albion-online
 | Refinado | 5 recursos × T4-T8 × .0-.4 (piedra solo .0), sin foco |
 | Cosecha | los 15 cultivos (9 por semilla con Premium) |
 | Cría | 44 animales/tiers (granja clásica a carne; monturas y salvajes, crecidos) |
-| Cayó fuerte | lo mismo que Gangas contra el promedio de **7 días** (`drops7`) |
+| Cayó fuerte | lo mismo que Gangas contra el promedio de **7, 90 y 180 días** (`drops7`, `drops90`, `drops180`) |
+| Tendencias | lo que más sube y más baja (mediana de 14 días contra los 14 anteriores) con proyección a 7 días cuando la tendencia es consistente (R² ≥ 0,3, acotada ±30 %) |
+| Más movidos | los 100 ítems que más plata movieron en 7 días, dónde se venden más y la ciudad que mejor paga hoy |
 
 ## Qué publica
 
-- Rama `data`: `americas.json`, `europe.json`, `asia.json` (~70 KB c/u, formato `v: 2`) y `status.json`
+- Rama `data`: `<region>-top.json` (lo mejor de cada tarjeta, ~2 KB: lo que baja la pantalla del Radar),
+  `<region>.json` (todas las listas, ~100 KB / ~13 KB comprimido: "Ver más", "Cayó fuerte") y `status.json`
   (salud por región: pedidos, reintentos, 429, filas, cobertura del promedio, candidatos, errores).
 - Rama `history`: `<region>/<fecha>.json.gz`, el precio medio de cada ítem-ciudad de cada día (~150 KB por
   día y región). Solo se agregan archivos, nunca se reescriben: sirve para 90/180 días, tendencias y proyecciones.
-- Rama `state`: `<region>.json.gz` con el promedio de 30 días de cada ítem-ciudad. Se refresca en rotación:
+- Rama `state`: `<region>.json.gz` con los promedios de 7/30/90/180 días, tendencia, volumen y proyección de
+  cada ítem-ciudad (salen del historial diario de 180 días de la API, pedido en rotación). Se refresca en rotación:
   una porción en cada corrida (todo el catálogo cada ~24 h; al arrancar, 3.000 ids por corrida hasta cubrirlo).
 
 La app lee `https://raw.githubusercontent.com/Johandiaz777/albion-world-radar/data/<region>.json`. Si el
