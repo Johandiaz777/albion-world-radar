@@ -125,3 +125,11 @@ test('cosecha: 9 cultivos por semilla; cría: bebé + 18 de alimento contra la v
   assert.equal(breed.feed.q, 18);
   assert.equal(breed.sellPrice, 6000);
 });
+
+test('itemValues: mediana de promedios entre ciudades, o de la venta fresca, sin el Mercado Negro', async () => {
+  const { itemValues } = await import('../lib/analyze.mjs');
+  const avg = { 'A|Caerleon': 100, 'A|Martlock': 120, 'A|Thetford': 400, 'A|Black Market': 9999 };
+  const index = new Map([['B', { sells: [{ sell_price_min: 50 }, { sell_price_min: 70 }], buys: [] }]]);
+  const out = itemValues(['A', 'B', 'C'], (id, c) => avg[`${id}|${c}`] ?? null, index, ['Caerleon', 'Martlock', 'Thetford', 'Black Market']);
+  assert.deepEqual(out, { A: 120, B: 60 });
+});

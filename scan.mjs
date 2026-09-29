@@ -23,6 +23,7 @@ import {
   craftDeals,
   farmDeals,
   indexPrices,
+  itemValues,
   marketDeals,
   mostTraded,
   parseDate,
@@ -223,6 +224,10 @@ async function scanRegion(region) {
     farm: firsts(payload.farm),
     breed: firsts(payload.breed),
   });
+  // Valor de mercado por ítem (para estimar el botín de cada kill en el scraper de kills y en la
+  // app): mediana entre ciudades del promedio de 30 días; si no hay, mediana de la venta fresca.
+  const values = itemValues(ids, avgOf(0), index, CITIES);
+  writeJson(path.join(OUT, `values-${region}.json`), { v: 1, region, generatedAt: payload.generatedAt, p: values });
   const status = {
     ok: true,
     at: payload.generatedAt,
