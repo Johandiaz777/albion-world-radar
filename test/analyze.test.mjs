@@ -126,6 +126,37 @@ test('cosecha: 9 cultivos por semilla; cría: bebé + 18 de alimento contra la v
   assert.equal(breed.sellPrice, 6000);
 });
 
+test('cría por especie: carne × carnicero + cría devuelta; carnívoros comen carne (BK.11 B)', async () => {
+  const { breedDeals } = await import('../lib/analyze.mjs');
+  const farm = {
+    feedUnits: 18,
+    feedId: 'T5_CABBAGE',
+    animals: [
+      { code: 'GOAT', tier: 4, baby: 'T4_FARM_GOAT_BABY', sell: 'T4_MEAT', feedId: 'T5_CABBAGE', feedUnits: 18, offspring: 0.7333, meatQty: 18 },
+      { code: 'DIREWOLF', tier: 6, baby: 'T6_FARM_DIREWOLF_BABY', sell: 'T6_FARM_DIREWOLF_GROWN', feedId: 'T6_MEAT', feedUnits: 64, offspring: 0, meatQty: 1 },
+    ],
+  };
+  const index = indexPrices(
+    [
+      row('T5_CABBAGE', 'Thetford', 100, 0),
+      row('T4_FARM_GOAT_BABY', 'Bridgewatch', 3000, 0),
+      // 1 carne a 300: con el modelo viejo (1 carne) era pérdida; con 18 carnes + cría devuelta, gana.
+      row('T4_MEAT', 'Caerleon', 320, 300),
+      row('T6_MEAT', 'Martlock', 200, 0),
+      row('T6_FARM_DIREWOLF_BABY', 'Lymhurst', 50000, 0),
+      row('T6_FARM_DIREWOLF_GROWN', 'Lymhurst', 90000, 80000),
+    ],
+    NOW,
+  );
+  const list = breedDeals(index, farm, NOW).list;
+  const goat = list.find((d) => d.animal === 'GOAT');
+  assert.ok(goat, 'la cabra da margen con 18 carnes y cría devuelta');
+  assert.equal(goat.sellPrice, 300);
+  const wolf = list.find((d) => d.animal === 'DIREWOLF');
+  assert.ok(wolf);
+  assert.deepEqual([wolf.feed.id, wolf.feed.q], ['T6_MEAT', 64]);
+});
+
 test('itemValues: mediana de promedios entre ciudades, o de la venta fresca, sin el Mercado Negro', async () => {
   const { itemValues } = await import('../lib/analyze.mjs');
   const avg = { 'A|Caerleon': 100, 'A|Martlock': 120, 'A|Thetford': 400, 'A|Black Market': 9999 };
