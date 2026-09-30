@@ -5,6 +5,6 @@
   "engines": { "node": ">=20" },
   "scripts": {
     "scan": "node scan.mjs",
-    "test": "node --test test/analyze.test.mjs"
+    "test": "node --test test/analyze.test.mjs test/listings.test.mjs"
   }
 }

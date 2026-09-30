@@ -23,6 +23,11 @@ revisa **todo el mercado** de las 3 regiones en [AODP](https://www.albion-online
   (salud por región: pedidos, reintentos, 429, filas, cobertura del promedio, candidatos, errores).
 - Rama `history`: `<region>/<fecha>.json.gz`, el precio medio de cada ítem-ciudad de cada día (~150 KB por
   día y región). Solo se agregan archivos, nunca se reescriben: sirve para 90/180 días, tendencias y proyecciones.
+- Rama `listings`: `<region>/<id>.json`, el **precio publicado** de cada día (venta más barata y mejor orden de
+  compra, solo lo visto ese día) de cada ítem-ciudad, 370 días. El historial de AODP son ventas que suben los
+  jugadores y hay ciudades que pasan meses sin una (Caerleon, Túnica de clérigo T5, Américas: última el
+  17/06/2026); esto llena ese hueco. Se escribe una vez por día y se publica con `push -f`; si la rama no se
+  pudo traer, los días esperan en el estado (hasta 3) en vez de publicar una carpeta vacía.
 - Rama `state`: `<region>.json.gz` con los promedios de 7/30/90/180 días, tendencia, volumen y proyección de
   cada ítem-ciudad (salen del historial diario de 180 días de la API, pedido en rotación). Se refresca en rotación:
   una porción en cada corrida (todo el catálogo cada ~24 h; al arrancar, 3.000 ids por corrida hasta cubrirlo).

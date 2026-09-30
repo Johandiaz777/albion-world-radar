@@ -9,6 +9,9 @@
 //      ("Cayó fuerte"), crafteo (226 recetas × T4-T8 × .0-.4), refinado (5 recursos × T4-T8 × .0-.4),
 //      cosecha (15 cultivos) y cría (44 animales/tiers).
 //   4. Historial diario de precios: `history/<region>/<fecha>.json.gz`, un archivo por día cerrado.
+//   4b. Precios PUBLICADOS por día (venta más barata y mejor compra de cada ítem-ciudad), un archivo
+//      por ítem en `listings/<region>/<id>.json` (ver lib/listings.mjs): llena el histórico de las
+//      ciudades donde casi nadie sube ventas.
 //   5. Escribe `out/<region>.json` (lo lee la app) y `out/status.json` (salud de cada región).
 //
 //   node scan.mjs                        # las 3 regiones
@@ -36,12 +39,18 @@ import {
   transportRoutes,
   trendMovers,
 } from './lib/analyze.mjs';
+import { recordListings, writeClosedDay } from './lib/listings.mjs';
 import { readJson, writeJson } from './lib/store.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(here, 'out');
 const HISTORY = path.join(here, 'history');
 const STATE = path.join(here, 'state');
+const LISTINGS = path.join(here, 'listings');
+// El workflow pone LISTINGS_READY=1 solo si trajo la rama `listings` (o si todavía no existe). Sin
+// eso, los días cerrados esperan en el estado: escribir sobre una carpeta vacía y publicarla con
+// push -f borraría todo lo acumulado.
+const LISTINGS_READY = process.env.LISTINGS_READY === '1';
 const BASELINE_DAYS = 30;
 // La API guarda el precio diario de cada ítem por meses: se piden 180 días en la misma rotación, así
 // "Cayó fuerte" de 90/180 días, tendencias y proyecciones existen desde el primer día.
@@ -208,6 +217,7 @@ async function scanRegion(region) {
   let quickIds = 0;
   let averages = { refreshed: 0, coverage: 0 };
   let closedDays = 0;
+  let listingFiles = 0;
   if (QUICK) {
     // Vuelta rápida: la tabla completa de la última vuelta de 30 min, con los ids calientes
     // reemplazados por su precio de ahora. Sin tabla guardada (primera vuelta), no hay nada que hacer.
@@ -230,6 +240,15 @@ async function scanRegion(region) {
     averages = await refreshAverages(client, state, log);
     closedDays = flushClosedDays(region, state);
     if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
+    const rec = recordListings(state.listDay ?? null, rows, cityIndex, Date.now());
+    state.listDay = rec.buffer;
+    // Hasta 3 días cerrados esperan si la rama no se pudo traer (se escriben en la próxima vuelta).
+    const pendingDays = [...(state.listPending ?? []), ...(rec.closed ? [rec.closed] : [])].slice(-3);
+    if (pendingDays.length && LISTINGS_READY) {
+      for (const d of pendingDays) listingFiles += writeClosedDay(path.join(LISTINGS, region), region, d, log);
+      log(`precios publicados: ${pendingDays.length} día(s) escritos (${listingFiles} ítems)`);
+      state.listPending = [];
+    } else state.listPending = pendingDays;
     writeJson(path.join(STATE, `${region}.json.gz`), state);
     writeJson(rowsFile, { v: 1, at: new Date().toISOString(), rows: rows.filter((r) => r.quality === 1).map(compactRow) });
   }
@@ -319,6 +338,9 @@ async function scanRegion(region) {
     candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
     published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
     historyDaysClosed: closedDays,
+    listingsToday: Object.keys(state.listDay?.p ?? {}).length,
+    listingsWritten: listingFiles,
+    listingsPending: (state.listPending ?? []).length,
     outputKB: Math.round(bytes / 102.4) / 10,
     notes: notes.slice(-10),
   };

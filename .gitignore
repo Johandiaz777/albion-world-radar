@@ -3,3 +3,4 @@ state/
 history/
 node_modules/
 *.tmp
+listings/

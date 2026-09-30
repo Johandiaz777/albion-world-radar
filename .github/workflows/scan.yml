@@ -81,6 +81,29 @@ jobs:
           traer data out
           traer state state
 
+          # Precios publicados por día (rama `listings`, un archivo por ítem, se reescribe con push -f
+          # como data/state). Solo se escribe/publica si se pudo traer la rama o si todavía no existe:
+          # publicar una carpeta vacía borraría el historial acumulado.
+          rm -rf listings
+          if git clone -q --depth 1 -b listings "$REPO_URL" listings 2>/dev/null; then
+            rm -rf listings/.git; export LISTINGS_READY=1
+          elif ! git ls-remote --exit-code --heads "$REPO_URL" listings >/dev/null 2>&1; then
+            mkdir -p listings; export LISTINGS_READY=1
+          else
+            echo "::warning::no se pudo traer la rama listings: los días cerrados esperan en el estado"
+            export LISTINGS_READY=0
+          fi
+          # Solo se publica cuando el escáner escribió algo (una vez por día), no en cada vuelta: la
+          # marca se toca al traer la rama, así lo recién clonado no se vuelve a subir entero.
+          touch /tmp/listings-stamp
+          publicar_listings() {
+            [ "${LISTINGS_READY:-0}" = 1 ] || return 0
+            if [ -n "$(find listings -type f -newer /tmp/listings-stamp 2>/dev/null | head -1)" ]; then
+              touch /tmp/listings-stamp
+              publicar listings listings
+            fi
+          }
+
           # Vuelta completa en :07 y :37 (todo el catálogo); vuelta rápida en :17, :27, :47 y :57 (los
           # más buscados de cada servidor + lo que el Radar ya muestra, mezclado con la última tabla
           # completa). La primera vuelta del ciclo siempre es completa.
@@ -91,6 +114,7 @@ jobs:
                 publicar state state
                 publicar data out
                 publicar_historial
+                publicar_listings
               else
                 echo "::warning::las 3 regiones fallaron en esta vuelta; se sigue con la siguiente"
               fi
