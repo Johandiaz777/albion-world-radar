@@ -57,3 +57,35 @@ test('writeClosedDay escribe un archivo por ítem, con @ en el nombre', () => {
   assert.deepEqual(x.c, { 0: [[TODAY, 10, 0]], 6: [[TODAY, 0, 30]] });
   assert.ok(fs.existsSync(path.join(dir, 'T5_X@1.json')));
 });
+
+test('compacta lo viejo por semana completa y es idempotente (auditoría A1)', async () => {
+  const { compactSeries, DAILY_DAYS } = await import('../lib/listings.mjs');
+  const day = 21000; // múltiplo de 7 = inicio de semana
+  // 370 días seguidos con precio = día (venta) y día/2 (compra).
+  const series = [];
+  for (let d = day - 369; d <= day; d++) series.push([d, d, Math.round(d / 2)]);
+  const out = compactSeries(series, day);
+  const daily = out.filter((p) => p[0] >= day - DAILY_DAYS + 1);
+  assert.equal(daily.length, DAILY_DAYS);
+  assert.ok(out.length < 90, `quedaron ${out.length} puntos`);
+  // Ordenado, sin repetidos, y la semana compactada usa la mediana de sus días.
+  for (let i = 1; i < out.length; i++) assert.ok(out[i][0] > out[i - 1][0]);
+  const w = out.find((p) => p[0] > day - 300 && p[0] < day - DAILY_DAYS && p[0] % 7 === 6);
+  // Semana completa de 7 días (w[0]-6 … w[0]): mediana = el día del medio.
+  assert.deepEqual(w, [w[0], w[0] - 3, Math.round((w[0] - 3) / 2)]);
+  // Idempotente: compactar de nuevo no cambia nada.
+  assert.deepEqual(compactSeries(out, day), out);
+  // Los ceros (sin dato ese lado) no cuentan en la mediana.
+  const gaps = compactSeries([[day - 105, 100, 0], [day - 104, 0, 50], [day - 103, 300, 0]], day);
+  assert.deepEqual(gaps.map((p) => [p[1], p[2]]), [[200, 50]]);
+});
+
+test('mergeDay mantiene el formato que lee la app', () => {
+  const day = 21000;
+  let file = null;
+  for (let d = day - 100; d <= day; d++) file = mergeDay(file, 'T4_BAG', 'americas', d, { 0: [d, 0] });
+  assert.equal(file.v, 1);
+  const pts = file.c['0'];
+  assert.ok(pts.length < 60 && pts.length >= 35);
+  assert.deepEqual(pts[pts.length - 1], [day, day, 0]);
+});

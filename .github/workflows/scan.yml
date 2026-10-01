@@ -66,15 +66,20 @@ jobs:
           # Historial diario: rama `history` que SOLO agrega archivos (uno por día y región, ~150 KB),
           # con commits normales. Un solo escritor (grupo de concurrencia), así que el push siempre
           # avanza sin pull ni rebase; si alguna vez lo rechazan, se reintenta en la próxima vuelta.
+          # El escáner solo AGREGA archivos acá (nunca lee los viejos): se clona sin contenido (sin blobs
+          # y con checkout disperso vacío), así cada ciclo baja casi nada aunque la rama crezca todo el
+          # año (auditoría A2). Los archivos viejos siguen en el índice y en la rama.
           rm -rf history
-          if ! git clone -q --depth 1 -b history "$REPO_URL" history 2>/dev/null; then
+          if git clone -q --depth 1 --filter=blob:none --no-checkout -b history "$REPO_URL" history 2>/dev/null; then
+            git -C history sparse-checkout set --no-cone '/.sin-archivos' && git -C history checkout -q history
+          else
             mkdir -p history && git -C history init -q -b history
           fi
           git -C history config user.name "radar-scan"
           git -C history config user.email "radar-scan@users.noreply.github.com"
           publicar_historial() {
             if [ -n "$(git -C history status --porcelain)" ]; then
-              git -C history add -A               && git -C history commit -q -m "historial $(date -u +%F)"               && git -C history push -q "$REPO_URL" HEAD:history               || echo "::warning::push del historial falló; se reintenta en la próxima vuelta"
+              git -C history add --sparse -A              && git -C history commit -q -m "historial $(date -u +%F)"               && git -C history push -q "$REPO_URL" HEAD:history               || echo "::warning::push del historial falló; se reintenta en la próxima vuelta"
             fi
           }
 
