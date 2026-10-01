@@ -30,6 +30,7 @@ import {
   craftDeals,
   farmDeals,
   indexPrices,
+  SLOW_MAX_AGE_MS,
   itemValues,
   marketDeals,
   mostTraded,
@@ -280,9 +281,13 @@ async function scanRegion(region) {
   const traded = mostTraded(index, statsOf, CITIES);
   const craft = craftDeals(index, catalog.recipes, catalog.craftReturnRate, now);
   const refine = refineDeals(index, catalog.refining, now);
-  const farm = farmDeals(index, catalog.farm, now);
-  const breed = breedDeals(index, catalog.farm, now);
-  const make = makeDeals(index, catalog.make, catalog.craftReturnRate, now);
+  // Cría, Cosecha, monturas y carnear: índice de 72 h (lo poco comerciado casi nunca tiene precio de
+  // ≤12 h) y precios atípicos fuera contra el promedio de 30 días de cada ciudad.
+  const slowIndex = indexPrices(rows, now, SLOW_MAX_AGE_MS);
+  const avg30 = avgOf(0);
+  const farm = farmDeals(slowIndex, catalog.farm, now, { avg30 });
+  const breed = breedDeals(slowIndex, catalog.farm, now, { avg30 });
+  const make = makeDeals(index, catalog.make, catalog.craftReturnRate, now, { slowIndex, avg30 });
 
   const payload = {
     v: 2,

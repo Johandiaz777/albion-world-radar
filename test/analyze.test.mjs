@@ -217,3 +217,77 @@ test('monturas y consumibles: un catálogo roto se salta sin publicar NaN ni lan
   assert.equal(candidates, 0);
   assert.equal(list.length, 0);
 });
+
+test('cosecha: la semilla devuelta (volcado) baja el costo; la orden de venta cuenta la comisión', async () => {
+  const { farmDeals } = await import('../lib/analyze.mjs');
+  const farm = { yieldPerSeed: 9, crops: [{ seed: 'T5_FARM_CABBAGE_SEED', crop: 'T5_CABBAGE', seedReturn: 0.8 }] };
+  // Medido en Américas el 2026-10-01: semilla 11.328, repollo a 446 en orden de compra (17 h).
+  const index = indexPrices([row('T5_FARM_CABBAGE_SEED', 'Martlock', 11328, 0, 17), row('T5_CABBAGE', 'Lymhurst', 470, 446, 17, 17), row('T5_CABBAGE', 'Thetford', 480, 0, 5)], NOW, 72 * 3600e3);
+  const d = farmDeals(index, farm, NOW).list[0];
+  // Antes: 9 × 446 × 0,96 − 11.328 < 0. Ahora la semilla cuesta 11.328 × 0,2 = 2.265,6.
+  assert.equal(d.id, 'T5_CABBAGE');
+  assert.equal(d.seedReturn, 0.8);
+  assert.equal(d.sellPrice, 446);
+  assert.deepEqual([d.order.price, d.order.city, d.order.cities], [470, 'Lymhurst', 2]);
+  assert.equal(d.weak, false);
+  // Sin devolución (zanahoria T1: 0 en el volcado) la semilla entera pesa y no se publica.
+  const none = farmDeals(index, { yieldPerSeed: 9, crops: [{ seed: 'T5_FARM_CABBAGE_SEED', crop: 'T5_CABBAGE', seedReturn: 0 }] }, NOW);
+  assert.equal(none.list.length, 0);
+});
+
+test('cría: hasta 72 h, la cría atípica (mamut) se descarta y una sola ciudad no lidera', async () => {
+  const { breedDeals } = await import('../lib/analyze.mjs');
+  const farm = {
+    feedUnits: 18,
+    feedId: 'T5_CABBAGE',
+    crops: [],
+    animals: [
+      { code: 'GOAT', tier: 4, baby: 'T4_FARM_GOAT_BABY', sell: 'T4_MEAT', meatQty: 18, offspring: 0.73 },
+      { code: 'MAMMOTH', tier: 8, baby: 'T8_FARM_MAMMOTH_BABY', sell: 'T8_FARM_MAMMOTH_GROWN', offspring: 0.5 },
+      { code: 'SHEEP', tier: 6, baby: 'T6_FARM_SHEEP_BABY', sell: 'T6_MEAT', meatQty: 18, offspring: 0.73 },
+    ],
+  };
+  const rows = [
+    row('T5_CABBAGE', 'Thetford', 400, 0),
+    // Cabra: crías de hace 12-30 h en 2 ciudades (con 12 h no saldría nada).
+    row('T4_FARM_GOAT_BABY', 'Martlock', 8130, 0, 30),
+    row('T4_FARM_GOAT_BABY', 'Thetford', 7897, 0, 13),
+    row('T4_MEAT', 'Caerleon', 900, 800, 20, 20),
+    row('T4_MEAT', 'Lymhurst', 950, 0, 20),
+    // Mamut: la cría a 10× su promedio → atípica.
+    row('T8_FARM_MAMMOTH_BABY', 'Martlock', 30000000, 0),
+    row('T8_FARM_MAMMOTH_BABY', 'Lymhurst', 31000000, 0),
+    row('T8_FARM_MAMMOTH_GROWN', 'Caerleon', 0, 40000000),
+    // Oveja: la carne solo en una ciudad → se publica pero detrás.
+    row('T6_FARM_SHEEP_BABY', 'Martlock', 5000, 0),
+    row('T6_FARM_SHEEP_BABY', 'Lymhurst', 5200, 0),
+    row('T6_MEAT', 'Caerleon', 2000, 0),
+  ];
+  const avg = { T8_FARM_MAMMOTH_BABY: 3000000 };
+  const avg30 = (id) => avg[id] ?? null;
+  const { list } = breedDeals(indexPrices(rows, NOW, 72 * 3600e3), farm, NOW, { avg30 });
+  assert.deepEqual(list.map((d) => d.animal), ['GOAT', 'SHEEP']);
+  const goat = list[0];
+  assert.equal(goat.weak, false);
+  assert.equal(goat.baby.cities, 2);
+  assert.equal(goat.baby.price, 7897);
+  assert.equal(list[1].weak, true);
+  // Con el índice de 12 h de siempre, la cabra no sale (sus crías tienen más de 12 h).
+  assert.ok(!breedDeals(indexPrices(rows, NOW), farm, NOW, { avg30 }).list.some((d) => d.animal === 'GOAT'));
+});
+
+test('carnear con orden de venta: el adulto de hace 40 h cuenta; poción sigue con 12 h', async () => {
+  const { makeDeals, SLOW_MAX_AGE_MS } = await import('../lib/analyze.mjs');
+  const rows = [
+    row('T4_FARM_GOAT_GROWN', 'Martlock', 10000, 0, 40),
+    row('T4_MEAT', 'Caerleon', 700, 500, 2, 2),
+    row('T4_MEAT', 'Lymhurst', 720, 0, 2),
+  ];
+  const make = [{ id: 'T4_MEAT', kind: 'butcher', n: 18, res: [['T4_FARM_GOAT_GROWN', 1]] }];
+  const slow = makeDeals(indexPrices(rows, NOW), make, 0.15, NOW, { slowIndex: indexPrices(rows, NOW, SLOW_MAX_AGE_MS) }).list[0];
+  // Inmediata: 18 × 500 × 0,96 − 10.000 < 0; con orden: 18 × 700 × 0,935 − 10.000 = 1.781.
+  assert.equal(slow.kind, 'butcher');
+  assert.equal(slow.sellPrice, 500);
+  assert.equal(slow.order.price, 700);
+  assert.equal(makeDeals(indexPrices(rows, NOW), make, 0.15, NOW).list.length, 0);
+});
