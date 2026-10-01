@@ -227,8 +227,10 @@ async function scanRegion(region) {
     const hot = await hotIds(region, log);
     const fresh = await client.prices(hot, log);
     failedChunks = fresh.failedChunks;
-    const replaced = new Set(fresh.rows.map((r) => r.item_id));
-    rows = stored.rows.filter((r) => !replaced.has(r.item_id)).concat(fresh.rows.filter((r) => r.quality === 1).map(compactRow));
+    // Por par ítem-ciudad: si AODP omite una ciudad de un ítem caliente, se conserva la guardada.
+    const freshRows = fresh.rows.filter((r) => r.quality === 1);
+    const replaced = new Set(freshRows.map((r) => `${r.item_id}|${r.city}`));
+    rows = stored.rows.filter((r) => !replaced.has(`${r.item_id}|${r.city}`)).concat(freshRows.map(compactRow));
     quickIds = hot.length;
     averages = { refreshed: 0, coverage: ids.filter((id) => today() - (state.refreshed[id] ?? -999) <= 1).length / ids.length };
     const fullAt = Date.parse(stored.at ?? '') || 0;
@@ -243,8 +245,10 @@ async function scanRegion(region) {
     if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
     const rec = recordListings(state.listDay ?? null, rows, cityIndex, Date.now());
     state.listDay = rec.buffer;
-    // Hasta 3 días cerrados esperan si la rama no se pudo traer (se escriben en la próxima vuelta).
-    const pendingDays = [...(state.listPending ?? []), ...(rec.closed ? [rec.closed] : [])].slice(-3);
+    // Hasta 7 días cerrados esperan si la rama no se pudo traer (se escriben en la próxima vuelta).
+    const allPending = [...(state.listPending ?? []), ...(rec.closed ? [rec.closed] : [])];
+    if (allPending.length > 7) log(`precios publicados: se descartan ${allPending.length - 7} día(s) viejos sin rama disponible`);
+    const pendingDays = allPending.slice(-7);
     if (pendingDays.length && LISTINGS_READY) {
       for (const d of pendingDays) listingFiles += writeClosedDay(path.join(LISTINGS, region), region, d, log);
       log(`precios publicados: ${pendingDays.length} día(s) escritos (${listingFiles} ítems)`);

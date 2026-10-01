@@ -202,3 +202,18 @@ test('monturas y consumibles: la montura no tiene devolución; la cocina sí, y 
   assert.equal(list[0].id, 'T5_MOUNT_HORSE');
   assert.ok(!list.some((d) => d.id === 'T4_MEAL_SOUP'));
 });
+
+test('monturas y consumibles: un catálogo roto se salta sin publicar NaN ni lanzar', async () => {
+  const { makeDeals } = await import('../lib/analyze.mjs');
+  const index = indexPrices([row('T5_MOUNT_HORSE', 'Lymhurst', 0, 60000), row('T5_LEATHER', 'Martlock', 1000, 0)], NOW);
+  const make = [
+    { id: 'T5_MOUNT_HORSE', kind: 'mount', res: [['T5_LEATHER', 20]] },
+    { id: 'T5_MOUNT_HORSE', kind: 'mount', n: 1, res: 'roto' },
+    { id: 'T5_MOUNT_HORSE', kind: 'mount', n: 1, res: [['T5_LEATHER']] },
+    { id: 'T5_MOUNT_HORSE', kind: 'mount', n: 1, res: [] },
+    null,
+  ];
+  const { list, candidates } = makeDeals(index, make, 0.15, NOW);
+  assert.equal(candidates, 0);
+  assert.equal(list.length, 0);
+});
