@@ -164,3 +164,41 @@ test('itemValues: mediana de promedios entre ciudades, o de la venta fresca, sin
   const out = itemValues(['A', 'B', 'C'], (id, c) => avg[`${id}|${c}`] ?? null, index, ['Caerleon', 'Martlock', 'Thetford', 'Black Market']);
   assert.deepEqual(out, { A: 120, B: 60 });
 });
+
+test('monturas y consumibles: la montura no tiene devolución; la cocina sí, y cuenta las unidades hechas', async () => {
+  const { makeDeals } = await import('../lib/analyze.mjs');
+  const index = indexPrices(
+    [
+      row('T5_MOUNT_HORSE', 'Lymhurst', 0, 60000),
+      row('T5_FARM_HORSE_GROWN', 'Martlock', 30000, 0),
+      row('T5_LEATHER', 'Martlock', 1000, 0),
+      row('T6_POTION_ENERGY', 'Caerleon', 0, 2000),
+      row('T6_FOXGLOVE', 'Lymhurst', 60, 0),
+      row('T6_MILK', 'Lymhurst', 100, 0),
+      row('T6_ALCOHOL', 'Lymhurst', 100, 0),
+      row('T4_MEAL_SOUP', 'Caerleon', 0, 100),
+      row('T4_CARROT', 'Lymhurst', 500, 0),
+    ],
+    NOW,
+  );
+  const make = [
+    { id: 'T5_MOUNT_HORSE', kind: 'mount', n: 1, res: [['T5_FARM_HORSE_GROWN', 1], ['T5_LEATHER', 20]] },
+    { id: 'T6_POTION_ENERGY', kind: 'potion', n: 5, res: [['T6_FOXGLOVE', 72], ['T6_MILK', 18], ['T6_ALCOHOL', 18]] },
+    // Pierde plata: no se publica.
+    { id: 'T4_MEAL_SOUP', kind: 'meal', n: 1, res: [['T4_CARROT', 16]] },
+    // Sin precio de un material: no se publica.
+    { id: 'T5_MOUNT_OX', kind: 'mount', n: 1, res: [['T5_FARM_OX_GROWN', 1], ['T5_PLANKS', 30]] },
+  ];
+  const { list, candidates } = makeDeals(index, make, 0.15, NOW);
+  assert.equal(candidates, 2);
+  const mount = list.find((d) => d.id === 'T5_MOUNT_HORSE');
+  // 60000 × 0,96 − (30000 + 20 × 1000) = 7600 → se publica, sin devolución.
+  assert.equal(mount.kind, 'mount');
+  assert.equal(mount.resources.length, 2);
+  assert.equal(mount.sellPrice, 60000);
+  const potion = list.find((d) => d.id === 'T6_POTION_ENERGY');
+  // 5 × 2000 × 0,96 − (72×60 + 18×100 + 18×100) × 0,85 = 9600 − 6732 = 2868.
+  assert.equal(potion.n, 5);
+  assert.equal(list[0].id, 'T5_MOUNT_HORSE');
+  assert.ok(!list.some((d) => d.id === 'T4_MEAL_SOUP'));
+});

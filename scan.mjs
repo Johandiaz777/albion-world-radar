@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   breedDeals,
+  makeDeals,
   craftDeals,
   farmDeals,
   indexPrices,
@@ -195,7 +196,7 @@ async function hotIds(region, log) {
   const out = new Set();
   for (const id of await topSearched(region, log)) if (known.has(id)) out.add(id);
   const published = readJson(path.join(OUT, `${region}.json`), null, log);
-  for (const key of ['transport', 'market', 'drops7', 'drops90', 'drops180', 'rising', 'falling', 'mostTraded', 'craft', 'refine', 'farm', 'breed']) {
+  for (const key of ['transport', 'market', 'drops7', 'drops90', 'drops180', 'rising', 'falling', 'mostTraded', 'craft', 'refine', 'farm', 'breed', 'make']) {
     for (const e of published?.[key] ?? []) if (typeof e?.id === 'string' && known.has(e.id)) out.add(e.id);
   }
   return [...out].slice(0, QUICK_MAX_IDS);
@@ -277,6 +278,7 @@ async function scanRegion(region) {
   const refine = refineDeals(index, catalog.refining, now);
   const farm = farmDeals(index, catalog.farm, now);
   const breed = breedDeals(index, catalog.farm, now);
+  const make = makeDeals(index, catalog.make, catalog.craftReturnRate, now);
 
   const payload = {
     v: 2,
@@ -297,6 +299,7 @@ async function scanRegion(region) {
     refine: refine.list,
     farm: farm.list,
     breed: breed.list,
+    make: make.list,
   };
   const bytes = writeJson(path.join(OUT, `${region}.json`), payload);
   // Resumen para la pantalla del Radar: lo mejor de cada tarjeta (~3 KB). La lista completa solo se
@@ -315,6 +318,8 @@ async function scanRegion(region) {
     refine: firsts(payload.refine),
     farm: firsts(payload.farm),
     breed: firsts(payload.breed),
+    // 3 por tipo: Crafteo toma pociones y comida, Cría las monturas y Cosecha el carnear.
+    make: ['mount', 'potion', 'meal', 'butcher'].flatMap((k) => firsts(payload.make.filter((d) => d.kind === k))),
   });
   // Valor de mercado por ítem (para estimar el botín de cada kill en el scraper de kills y en la
   // app): mediana entre ciudades del promedio de 30 días; si no hay, mediana de la venta fresca.
@@ -335,8 +340,8 @@ async function scanRegion(region) {
     averagesRefreshed: averages.refreshed,
     mode: QUICK ? 'quick' : 'full',
     quickIds,
-    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates },
-    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length },
+    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates, make: make.candidates },
+    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length, make: make.list.length },
     historyDaysClosed: closedDays,
     listingsToday: Object.keys(state.listDay?.p ?? {}).length,
     listingsWritten: listingFiles,
