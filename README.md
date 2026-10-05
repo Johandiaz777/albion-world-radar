@@ -15,12 +15,16 @@ revisa **todo el mercado** de las 3 regiones en [AODP](https://www.albion-online
 | Cayó fuerte | lo mismo que Gangas contra el promedio de **7, 90 y 180 días** (`drops7`, `drops90`, `drops180`) |
 | Tendencias | lo que más sube y más baja (mediana de 14 días contra los 14 anteriores) con proyección a 7 días cuando la tendencia es consistente (R² ≥ 0,3, acotada ±30 %) |
 | Más movidos | los 100 ítems que más plata movieron en 7 días, dónde se venden más y la ciudad que mejor paga hoy |
+| Mercado Negro | cada orden de compra fresca del Mercado Negro (calidad 1, ≤12 h) con su promedio de 30 días, la referencia de las ciudades, la mejor venta inmediata y la venta más barata (≤72 h) para revender |
 
 ## Qué publica
 
 - Rama `data`: `<region>-top.json` (lo mejor de cada tarjeta, ~2 KB: lo que baja la pantalla del Radar),
   `<region>.json` (todas las listas, ~100 KB / ~13 KB comprimido: "Ver más", "Cayó fuerte") y `status.json`
-  (salud por región: pedidos, reintentos, 429, filas, cobertura del promedio, candidatos, errores).
+  (salud por región: pedidos, reintentos, 429, filas, cobertura del promedio, candidatos, errores) y
+  `<region>-bm.json` (Mercado Negro, filas compactas `[id, precio, edadMin, promedioMN30, promedioCiudades30,
+  ventaYa, ciudadVentaYa, edadVentaYa, compra, ciudadCompra, edadCompra]`; ~70 KB comprimido en Europa: lo baja
+  solo la pantalla Mercado Negro de la app).
 - Rama `history`: `<region>/<fecha>.json.gz`, el precio medio de cada ítem-ciudad de cada día (~150 KB por
   día y región). Solo se agregan archivos, nunca se reescriben: sirve para 90/180 días, tendencias y proyecciones.
 - Rama `listings`: `<region>/<id>.json`, el **precio publicado** de cada día (venta más barata y mejor orden de

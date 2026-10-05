@@ -25,6 +25,8 @@ import { fileURLToPath } from 'node:url';
 
 import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
+  BM_CITIES,
+  blackMarketOffers,
   breedDeals,
   makeDeals,
   craftDeals,
@@ -288,6 +290,7 @@ async function scanRegion(region) {
   const farm = farmDeals(slowIndex, catalog.farm, now, { avg30 });
   const breed = breedDeals(slowIndex, catalog.farm, now, { avg30 });
   const make = makeDeals(index, catalog.make, catalog.craftReturnRate, now, { slowIndex, avg30 });
+  const blackMarket = blackMarketOffers(index, now, { slowIndex, avg30 });
 
   const payload = {
     v: 2,
@@ -330,6 +333,15 @@ async function scanRegion(region) {
     // 3 por tipo: Crafteo toma pociones y comida, Cría las monturas y Cosecha el carnear.
     make: ['mount', 'potion', 'meal', 'butcher'].flatMap((k) => firsts(payload.make.filter((d) => d.kind === k))),
   });
+  // Mercado Negro (parte 73 de la app): archivo aparte, lo baja solo esa pantalla al abrirse.
+  const bmBytes = writeJson(path.join(OUT, `${region}-bm.json`), {
+    v: 1,
+    kind: 'bm',
+    region,
+    generatedAt: payload.generatedAt,
+    cities: BM_CITIES,
+    rows: blackMarket.list,
+  });
   // Valor de mercado por ítem (para estimar el botín de cada kill en el scraper de kills y en la
   // app): mediana entre ciudades del promedio de 30 días; si no hay, mediana de la venta fresca.
   const values = itemValues(ids, avgOf(0), index, CITIES);
@@ -349,13 +361,14 @@ async function scanRegion(region) {
     averagesRefreshed: averages.refreshed,
     mode: QUICK ? 'quick' : 'full',
     quickIds,
-    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates, make: make.candidates },
-    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length, make: make.list.length },
+    candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates, make: make.candidates, blackMarket: blackMarket.candidates },
+    published: { transport: transport.list.length, market: market.list.length, drops7: drops7.list.length, drops90: drops90.list.length, drops180: drops180.list.length, rising: trends.rising.length, falling: trends.falling.length, mostTraded: traded.list.length, craft: craft.list.length, refine: refine.list.length, farm: farm.list.length, breed: breed.list.length, make: make.list.length, blackMarket: blackMarket.list.length },
     historyDaysClosed: closedDays,
     listingsToday: Object.keys(state.listDay?.p ?? {}).length,
     listingsWritten: listingFiles,
     listingsPending: (state.listPending ?? []).length,
     outputKB: Math.round(bytes / 102.4) / 10,
+    blackMarketKB: Math.round(bmBytes / 102.4) / 10,
     notes: notes.slice(-10),
   };
   console.log(`[${region}] ${JSON.stringify({ ...status, notes: undefined })}`);

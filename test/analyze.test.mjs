@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { craftDeals, indexPrices, marketDeals, refineDeals, robustAverage, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, blackMarketOffers, craftDeals, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -290,4 +290,39 @@ test('carnear con orden de venta: el adulto de hace 40 h cuenta; poción sigue c
   assert.equal(slow.sellPrice, 500);
   assert.equal(slow.order.price, 700);
   assert.equal(makeDeals(indexPrices(rows, NOW), make, 0.15, NOW).list.length, 0);
+});
+
+test('Mercado Negro: cada oferta con su comparación; fuera trols, rellenos y datos rotos', () => {
+  const rows = [
+    // Bolsa: el MN paga 2.000; Martlock compra ya a 1.500 (hace 30 h: vale del lado de las ciudades) y
+    // Lymhurst vende a 1.200 (para revender).
+    row('T4_BAG', 'Black Market', 0, 2000, 1, 2),
+    row('T4_BAG', 'Martlock', 0, 1500, 1, 30),
+    row('T4_BAG', 'Lymhurst', 1200, 0),
+    // Orden de relleno en una ciudad (<10 % del MN) y venta absurda (revender daría >300 %): no cuentan.
+    row('T4_BAG', 'Thetford', 100, 150),
+    // Espada: orden del MN 3× sobre lo que pagó en promedio = trol.
+    row('T4_MAIN_SWORD', 'Black Market', 0, 90000),
+    // Capa: orden del MN de hace 20 h = vieja, no se publica.
+    row('T4_CAPE', 'Black Market', 0, 5000, 1, 20),
+  ];
+  const index = indexPrices(rows, NOW);
+  const slowIndex = indexPrices(rows, NOW, SLOW_MAX_AGE_MS);
+  const avgs = { 'T4_BAG|Black Market': 1800, 'T4_BAG|Martlock': 1400, 'T4_BAG|Lymhurst': 1300, 'T4_MAIN_SWORD|Black Market': 20000 };
+  const avg30 = (id, city) => avgs[`${id}|${city}`] ?? null;
+  const { candidates, list } = blackMarketOffers(index, NOW, { slowIndex, avg30 });
+  assert.equal(candidates, 2);
+  assert.equal(list.length, 1);
+  const [id, price, age, bmAvg, cityAvg, instant, instantCity, instantAge, cheap, cheapCity, cheapAge] = list[0];
+  assert.equal(id, 'T4_BAG');
+  assert.equal(price, 2000);
+  assert.equal(age, 120);
+  assert.equal(bmAvg, 1800);
+  assert.equal(cityAvg, 1350);
+  assert.equal(instant, 1500);
+  assert.equal(BM_CITIES[instantCity], 'Martlock');
+  assert.equal(instantAge, 30 * 60);
+  assert.equal(cheap, 1200);
+  assert.equal(BM_CITIES[cheapCity], 'Lymhurst');
+  assert.equal(cheapAge, 60);
 });
