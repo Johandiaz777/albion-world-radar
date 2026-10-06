@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { BM_CITIES, blackMarketOffers, craftDeals, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, blackMarketOffers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -325,4 +325,12 @@ test('Mercado Negro: cada oferta con su comparación; fuera trols, rellenos y da
   assert.equal(cheap, 1200);
   assert.equal(BM_CITIES[cheapCity], 'Lymhurst');
   assert.equal(cheapAge, 60);
+});
+
+test('vuelta rápida: las órdenes del Mercado Negro que más pagan, sin repetir, solo del catálogo y con tope', () => {
+  const known = new Set(['T8_BAG', 'T7_BAG', 'T6_BAG', 'T5_BAG']);
+  const rows = [['T8_BAG', 9000], ['T8_BAG', 8000], ['T_FUERA', 7000], ['T7_BAG', 6000], 'roto', [null, 1], ['T6_BAG', 5000], ['T5_BAG', 4000]];
+  assert.deepEqual(quickBlackMarketIds(rows, known, 3), ['T8_BAG', 'T7_BAG', 'T6_BAG']);
+  assert.deepEqual(quickBlackMarketIds(undefined, known), []);
+  assert.deepEqual(quickBlackMarketIds(rows, known, 0), []);
 });

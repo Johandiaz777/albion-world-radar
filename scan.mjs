@@ -27,6 +27,7 @@ import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   BM_CITIES,
   blackMarketOffers,
+  quickBlackMarketIds,
   breedDeals,
   makeDeals,
   craftDeals,
@@ -74,6 +75,8 @@ const limitAt = args.indexOf('--limit');
 const QUICK = args.includes('--quick');
 /** Tope de ids de la vuelta rápida (unos 8 pedidos por región). */
 const QUICK_MAX_IDS = 900;
+/** Cupo aparte de la vuelta rápida para las órdenes del Mercado Negro que más pagan. */
+const QUICK_BM_IDS = 300;
 const FIRESTORE_DOC = 'https://firestore.googleapis.com/v1/projects/albion-world/databases/(default)/documents/searchStats';
 const ids = limitAt >= 0 ? catalog.ids.slice(0, Number(args[limitAt + 1])) : catalog.ids;
 const cityIndex = new Map(CITIES.map((c, i) => [c, i]));
@@ -193,7 +196,8 @@ async function topSearched(region, log) {
   return [];
 }
 
-/** Ids calientes de la vuelta rápida: lo que la gente busca + lo que el Radar muestra ahora. */
+/** Ids calientes de la vuelta rápida: lo que la gente busca + lo que el Radar muestra ahora + las
+ * órdenes del Mercado Negro que más pagan (con su propio cupo, para no desplazar a las otras). */
 async function hotIds(region, log) {
   const known = new Set(ids);
   const out = new Set();
@@ -202,7 +206,11 @@ async function hotIds(region, log) {
   for (const key of ['transport', 'market', 'drops7', 'drops90', 'drops180', 'rising', 'falling', 'mostTraded', 'craft', 'refine', 'farm', 'breed', 'make']) {
     for (const e of published?.[key] ?? []) if (typeof e?.id === 'string' && known.has(e.id)) out.add(e.id);
   }
-  return [...out].slice(0, QUICK_MAX_IDS);
+  const hot = [...out].slice(0, QUICK_MAX_IDS);
+  const inHot = new Set(hot);
+  const bm = readJson(path.join(OUT, `${region}-bm.json`), null, log);
+  for (const id of quickBlackMarketIds(bm?.rows, known, QUICK_BM_IDS)) if (!inHot.has(id)) hot.push(id);
+  return hot;
 }
 
 async function scanRegion(region) {
