@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { BM_CITIES, blackMarketOffers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -333,4 +333,21 @@ test('vuelta rápida: las órdenes del Mercado Negro que más pagan, sin repetir
   assert.deepEqual(quickBlackMarketIds(rows, known, 3), ['T8_BAG', 'T7_BAG', 'T6_BAG']);
   assert.deepEqual(quickBlackMarketIds(undefined, known), []);
   assert.deepEqual(quickBlackMarketIds(rows, known, 0), []);
+});
+
+test('cityTopSellers: por ciudad, por plata movida, con mínimo de ventas y sin Mercado Negro', () => {
+  const index = new Map([['A', {}], ['B', {}], ['C', {}], ['D', {}]]);
+  const stats = {
+    'A|Lymhurst': { volume7: 1000, avg30: 10 }, // 10.000
+    'B|Lymhurst': { volume7: 7, avg30: 5000 }, // 35.000
+    'C|Lymhurst': { volume7: 2, avg30: 1e7 }, // una venta suelta carísima: fuera
+    'D|Lymhurst': { volume7: 50, avg30: 0 }, // sin promedio: fuera
+    'A|Black Market': { volume7: 999, avg30: 999 },
+  };
+  const statsOf = (id, city) => stats[`${id}|${city}`] ?? null;
+  const out = cityTopSellers(index, statsOf, ['Lymhurst', 'Martlock', 'Black Market'], { top: 5 });
+  assert.deepEqual(out.Lymhurst, [['B', 7, 5000], ['A', 1000, 10]]);
+  assert.deepEqual(out.Martlock, []);
+  assert.equal('Black Market' in out, false);
+  assert.equal(cityTopSellers(index, statsOf, ['Lymhurst'], { top: 1 }).Lymhurst.length, 1);
 });

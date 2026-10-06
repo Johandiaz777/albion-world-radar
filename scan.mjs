@@ -27,6 +27,7 @@ import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   BM_CITIES,
   blackMarketOffers,
+  cityTopSellers,
   quickBlackMarketIds,
   breedDeals,
   makeDeals,
@@ -349,6 +350,15 @@ async function scanRegion(region) {
     generatedAt: payload.generatedAt,
     cities: BM_CITIES,
     rows: blackMarket.list,
+  });
+  // Lo más vendido en cada ciudad (parte 79 de la app): archivo aparte (~7 KB), lo baja solo
+  // Distribución de venta al abrirse. Mismas estadísticas de 7 días que "más movidos": sin pedidos nuevos.
+  writeJson(path.join(OUT, `${region}-cities.json`), {
+    v: 1,
+    kind: 'cities',
+    region,
+    generatedAt: payload.generatedAt,
+    top: cityTopSellers(index, statsOf, CITIES),
   });
   // Valor de mercado por ítem (para estimar el botín de cada kill en el scraper de kills y en la
   // app): mediana entre ciudades del promedio de 30 días; si no hay, mediana de la venta fresca.
