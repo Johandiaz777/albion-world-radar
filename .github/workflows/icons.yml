@@ -1,0 +1,47 @@
+name: icons
+# Espejo de íconos (parte 84 de la app): baja los íconos del catálogo (calidad 1, 128 px) del render
+# oficial, los pasa a WebP y los deja como artefacto `icon-mirror` (7 días). La publicación en
+# Firebase Hosting (sitio albion-world-icons) se hace desde la PC del dueño con la CLI, así que acá
+# no hay credenciales. Se lanza a mano (Actions → icons → Run workflow) cuando el juego trae ítems
+# nuevos; mientras tanto la app pide al render oficial los que falten.
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: icons
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  icons:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar cwebp
+        run: sudo apt-get update -q && sudo apt-get install -y -q webp
+
+      - name: Bajar los íconos del render oficial
+        run: node icons.mjs icons-png
+
+      - name: Pasar a WebP
+        run: |
+          set -euo pipefail
+          mkdir -p icons-webp
+          ls icons-png | sed 's/\.png$//' | xargs -P 4 -I{} cwebp -quiet -q 88 -alpha_q 100 -m 6 "icons-png/{}.png" -o "icons-webp/{}.webp"
+          echo "PNG:  $(ls icons-png | wc -l) archivos, $(du -sh icons-png | cut -f1)"
+          echo "WebP: $(ls icons-webp | wc -l) archivos, $(du -sh icons-webp | cut -f1)"
+          cp icons-report.txt icons-webp/_faltantes.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icon-mirror
+          path: icons-webp
+          retention-days: 7
+          compression-level: 0

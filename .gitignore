@@ -4,3 +4,6 @@ history/
 node_modules/
 *.tmp
 listings/
+icons-png/
+icons-webp/
+icons-report.txt
