@@ -50,17 +50,20 @@ jobs:
           }
 
           # Publica una carpeta como UN commit en su rama (push -f: sin historial, sin conflictos).
+          # Devuelve 1 si no se publicó (auditoría p86 R1: antes se tragaba el fallo y quien llamaba daba
+          # por subido lo que no subió).
           publicar() {
             if grep -rlI -e '^<<<<<<< ' -e '^>>>>>>> ' "$2" >/dev/null 2>&1; then
-              echo "::error::marcadores de conflicto en $2: no se publica"; return 0
+              echo "::error::marcadores de conflicto en $2: no se publica"; return 1
             fi
-            (
+            if (
               cd "$2" && rm -rf .git && git init -q -b "$1" \
               && git config user.name "radar-scan" \
               && git config user.email "radar-scan@users.noreply.github.com" \
               && git add -A && git commit -q -m "$1 $(date -u +%FT%TZ)" \
               && git push -q -f "$REPO_URL" "$1"
-            ) || echo "::warning::push de $1 falló; se reintenta en la próxima vuelta"
+            ); then return 0; fi
+            echo "::warning::push de $1 falló; se reintenta en la próxima vuelta"; return 1
           }
 
           # Historial diario: rama `history` que SOLO agrega archivos (uno por día y región, ~150 KB),
@@ -69,18 +72,37 @@ jobs:
           # El escáner solo AGREGA archivos acá (nunca lee los viejos): se clona sin contenido (sin blobs
           # y con checkout disperso vacío), así cada ciclo baja casi nada aunque la rama crezca todo el
           # año (auditoría A2). Los archivos viejos siguen en el índice y en la rama.
+          # Tres intentos: sin la rama traída el push del historial no avanza y `state` no se publica en todo
+          # el ciclo (abajo), así que un corte de red al arrancar no debe costar 5 horas.
           rm -rf history
-          if git clone -q --depth 1 --filter=blob:none --no-checkout -b history "$REPO_URL" history 2>/dev/null; then
+          for intento in 1 2 3; do
+            if git clone -q --depth 1 --filter=blob:none --no-checkout -b history "$REPO_URL" history 2>/dev/null; then break; fi
+            rm -rf history; [ "$intento" = 3 ] || sleep 15
+          done
+          if [ -d history/.git ]; then
             git -C history sparse-checkout set --no-cone '/.sin-archivos' && git -C history checkout -q history
           else
+            if git ls-remote --exit-code --heads "$REPO_URL" history >/dev/null 2>&1; then
+              echo "::warning::no se pudo traer la rama history: este ciclo no publica state (el próximo vuelve a escribir esos días)"
+            fi
             mkdir -p history && git -C history init -q -b history
           fi
           git -C history config user.name "radar-scan"
           git -C history config user.email "radar-scan@users.noreply.github.com"
+          # Un commit del historial que todavía no se subió se reintenta aunque no haya archivos nuevos
+          # (auditoría p86 R4: antes esperaba al día siguiente). Devuelve 1 mientras quede algo sin subir.
+          HIST_PENDING=0
           publicar_historial() {
             if [ -n "$(git -C history status --porcelain)" ]; then
-              git -C history add --sparse -A              && git -C history commit -q -m "historial $(date -u +%F)"               && git -C history push -q "$REPO_URL" HEAD:history               || echo "::warning::push del historial falló; se reintenta en la próxima vuelta"
+              if git -C history add --sparse -A && git -C history commit -q -m "historial $(date -u +%F)"; then
+                HIST_PENDING=1
+              else
+                echo "::warning::no se pudo armar el commit del historial"; return 1
+              fi
             fi
+            [ "$HIST_PENDING" = 1 ] || return 0
+            if git -C history push -q "$REPO_URL" HEAD:history; then HIST_PENDING=0; return 0; fi
+            echo "::warning::push del historial falló; se reintenta en la próxima vuelta"; return 1
           }
 
           traer data out
@@ -99,13 +121,16 @@ jobs:
             export LISTINGS_READY=0
           fi
           # Solo se publica cuando el escáner escribió algo (una vez por día), no en cada vuelta: la
-          # marca se toca al traer la rama, así lo recién clonado no se vuelve a subir entero.
+          # marca se toca al traer la rama, así lo recién clonado no se vuelve a subir entero. La marca
+          # avanza SOLO si el push salió (auditoría p86 R1: antes avanzaba antes y un push fallido no se
+          # reintentaba nunca). Devuelve 1 si quedó algo sin subir.
           touch /tmp/listings-stamp
           publicar_listings() {
             [ "${LISTINGS_READY:-0}" = 1 ] || return 0
             if [ -n "$(find listings -type f -newer /tmp/listings-stamp 2>/dev/null | head -1)" ]; then
-              touch /tmp/listings-stamp
-              publicar listings listings
+              touch /tmp/listings-stamp.next
+              publicar listings listings || return 1
+              mv /tmp/listings-stamp.next /tmp/listings-stamp
             fi
           }
 
@@ -116,16 +141,27 @@ jobs:
           while [ "$SECONDS" -lt "$END" ]; do
             if [ "$MODO" = full ]; then
               if node scan.mjs; then
-                publicar state state
-                publicar data out
-                publicar_historial
-                publicar_listings
+                # `|| :` en las llamadas sueltas: el paso corre con `bash -e` y un push fallido no debe cortar el
+                # ciclo (el aviso ya sale de `publicar` y la próxima vuelta reintenta).
+                publicar data out || :
+                # Orden (auditoría p86 R1/R2): primero lo que solo se agrega (historial y precios publicados)
+                # y después `state`, que ya los da por escritos (borró esos días de su buffer). Si alguno no
+                # subió, `state` espera: la próxima vuelta lo reintenta y, si el ciclo muere antes, el siguiente
+                # parte del `state` anterior y vuelve a escribir esos días (escribirlos dos veces da lo mismo).
+                ok=1
+                publicar_historial || ok=0
+                publicar_listings || ok=0
+                if [ "$ok" = 1 ]; then
+                  publicar state state || :
+                else
+                  echo "::warning::state no se publica en esta vuelta: falta subir historial o precios publicados"
+                fi
               else
                 echo "::warning::las 3 regiones fallaron en esta vuelta; se sigue con la siguiente"
               fi
             else
               if node scan.mjs --quick; then
-                publicar data out
+                publicar data out || :
               else
                 echo "::warning::vuelta rápida sin resultado; se sigue"
               fi

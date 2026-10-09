@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { BM_CITIES, betterQualitySells, blackMarketGapIds, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, betterQualitySells, keepMissingRows, blackMarketGapIds, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -383,4 +383,11 @@ test('cityTopSellers: por ciudad, por plata movida, con mínimo de ventas y sin 
   assert.deepEqual(out.Martlock, []);
   assert.equal('Black Market' in out, false);
   assert.equal(cityTopSellers(index, statsOf, ['Lymhurst'], { top: 1 }).Lymhurst.length, 1);
+});
+
+test('vuelta completa con un trozo perdido: conserva de la tabla anterior solo los ítems que faltan (auditoría p86 R3)', () => {
+  const fresh = [row('T4_BAG', 'Martlock', 1000, 900)];
+  const previous = [row('T4_BAG', 'Martlock', 800, 700), row('T5_BAG', 'Lymhurst', 2000, 1500), row('T5_BAG', 'Martlock', 2100, 0), null];
+  assert.deepEqual(keepMissingRows(fresh, previous).map((r) => `${r.item_id}|${r.city}`), ['T5_BAG|Lymhurst', 'T5_BAG|Martlock']);
+  assert.deepEqual(keepMissingRows(fresh, undefined), []);
 });

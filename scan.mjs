@@ -27,6 +27,7 @@ import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   BM_CITIES,
   betterQualitySells,
+  keepMissingRows,
   blackMarketGapIds,
   blackMarketOffers,
   cityTopSellers,
@@ -256,10 +257,20 @@ async function scanRegion(region) {
     rows = full.rows;
     failedChunks = full.failedChunks;
     if (!rows.length) throw new Error('AODP no devolvió precios');
+    // Auditoría p86 R3: con un trozo perdido, la tabla que se guarda (y de la que parten las vueltas rápidas
+    // de los 30 min siguientes) quedaba sin esos ítems. AODP devuelve filas para todo id pedido, así que un
+    // id ausente es de un trozo perdido: conserva sus filas de la tabla anterior (los filtros de edad de
+    // 12/72 h descartan lo que ya esté viejo).
+    if (failedChunks > 0) {
+      const kept = keepMissingRows(rows, readJson(rowsFile, null, log)?.rows);
+      if (kept.length) log(`${kept.length} filas de la tabla anterior para los ítems del trozo perdido`);
+      rows = rows.concat(kept);
+    }
     averages = await refreshAverages(client, state, log);
     closedDays = flushClosedDays(region, state);
     if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
-    const rec = recordListings(state.listDay ?? null, rows, cityIndex, Date.now());
+    // Precios publicados: solo lo que llegó en esta vuelta (no las filas conservadas de la tabla anterior).
+    const rec = recordListings(state.listDay ?? null, full.rows, cityIndex, Date.now());
     state.listDay = rec.buffer;
     // Hasta 7 días cerrados esperan si la rama no se pudo traer (se escriben en la próxima vuelta).
     const allPending = [...(state.listPending ?? []), ...(rec.closed ? [rec.closed] : [])];
