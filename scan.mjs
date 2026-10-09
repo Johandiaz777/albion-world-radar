@@ -26,6 +26,8 @@ import { fileURLToPath } from 'node:url';
 import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   BM_CITIES,
+  betterQualitySells,
+  blackMarketGapIds,
   blackMarketOffers,
   cityTopSellers,
   quickBlackMarketIds,
@@ -78,6 +80,8 @@ const QUICK = args.includes('--quick');
 const QUICK_MAX_IDS = 900;
 /** Cupo aparte de la vuelta rápida para las órdenes del Mercado Negro que más pagan. */
 const QUICK_BM_IDS = 300;
+/** Tope de ofertas del Mercado Negro sin venta Normal por las que se piden las otras calidades (~7 pedidos). */
+const BM_GAP_IDS = 1500;
 const FIRESTORE_DOC = 'https://firestore.googleapis.com/v1/projects/albion-world/databases/(default)/documents/searchStats';
 const ids = limitAt >= 0 ? catalog.ids.slice(0, Number(args[limitAt + 1])) : catalog.ids;
 const cityIndex = new Map(CITIES.map((c, i) => [c, i]));
@@ -299,7 +303,25 @@ async function scanRegion(region) {
   const farm = farmDeals(slowIndex, catalog.farm, now, { avg30 });
   const breed = breedDeals(slowIndex, catalog.farm, now, { avg30 });
   const make = makeDeals(index, catalog.make, catalog.craftReturnRate, now, { slowIndex, avg30 });
-  const blackMarket = blackMarketOffers(index, now, { slowIndex, avg30 });
+  // Mercado Negro con ventas de calidad mejor (parte 87 de la app: el 57 % de las ofertas no tenía venta
+  // Normal en ninguna ciudad aunque sí de otras calidades, que su orden acepta). Solo en la vuelta
+  // completa y solo para esas ofertas (tope BM_GAP_IDS, las que más pagan): ~7 pedidos más por región cada
+  // 30 min con el mismo turno global. La vuelta rápida reusa lo guardado para que la lista no parpadee.
+  const betterFile = path.join(STATE, `${region}-bm-quality.json.gz`);
+  let betterRows = [];
+  if (QUICK) {
+    betterRows = readJson(betterFile, null, log)?.rows ?? [];
+  } else {
+    const gap = blackMarketGapIds(blackMarketOffers(index, now, { slowIndex, avg30 }).list, BM_GAP_IDS);
+    if (gap.length) {
+      const extra = await client.prices(gap, log, { qualities: [2, 3, 4, 5], places: BM_CITIES });
+      betterRows = extra.rows.filter((r) => r && r.quality > 1 && r.sell_price_min > 0).map(compactRow);
+      log(`Mercado Negro: ${gap.length} ofertas sin venta Normal; ${betterRows.length} ventas de otra calidad${extra.failedChunks ? ` (${extra.failedChunks} trozo(s) perdidos)` : ''}`);
+    }
+    writeJson(betterFile, { v: 1, at: new Date().toISOString(), rows: betterRows });
+  }
+  const betterSells = betterQualitySells(betterRows, now, { avg30 });
+  const blackMarket = blackMarketOffers(index, now, { slowIndex, avg30, betterSells });
 
   const payload = {
     v: 2,

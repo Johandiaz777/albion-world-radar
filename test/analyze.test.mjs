@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { BM_CITIES, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, betterQualitySells, blackMarketGapIds, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -325,6 +325,39 @@ test('Mercado Negro: cada oferta con su comparación; fuera trols, rellenos y da
   assert.equal(cheap, 1200);
   assert.equal(BM_CITIES[cheapCity], 'Lymhurst');
   assert.equal(cheapAge, 60);
+  assert.equal(list[0][11], 1);
+});
+
+test('Mercado Negro: una venta de calidad mejor sirve para revender (la orden de Normal la acepta)', () => {
+  const q = (item_id, city, quality, sell, hSell = 1) => ({ ...row(item_id, city, sell, 0, hSell), quality });
+  // Caso real (Américas, 08/10): el Mercado Negro paga 1,1 M y en las ciudades solo hay ventas
+  // Sobresaliente (Lymhurst 900 mil) y Excelente (Caerleon 2 M); ninguna Normal.
+  const rows = [row('T6_2H_HOLYSTAFF_UNDEAD@3', 'Black Market', 0, 1_108_440)];
+  const index = indexPrices(rows, NOW);
+  const slowIndex = indexPrices(rows, NOW, SLOW_MAX_AGE_MS);
+  const first = blackMarketOffers(index, NOW, { slowIndex });
+  assert.deepEqual(blackMarketGapIds(first.list), ['T6_2H_HOLYSTAFF_UNDEAD@3']);
+  assert.deepEqual(blackMarketGapIds(first.list, 0), []);
+  const avgs = { 'T6_2H_HOLYSTAFF_UNDEAD@3|Thetford': 1_000_000 };
+  const better = betterQualitySells(
+    [
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Lymhurst', 3, 900_000),
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Caerleon', 4, 1_990_000),
+      // Calidad Normal, Mercado Negro, vieja (80 h) o bajo el piso ÷3 del promedio: no entran.
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Martlock', 1, 500_000),
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Black Market', 3, 500_000),
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Bridgewatch', 2, 600_000, 80),
+      q('T6_2H_HOLYSTAFF_UNDEAD@3', 'Thetford', 2, 300_000),
+    ],
+    NOW,
+    { avg30: (id, city) => avgs[`${id}|${city}`] ?? null },
+  );
+  assert.deepEqual(better.get('T6_2H_HOLYSTAFF_UNDEAD@3').map((r) => r.city), ['Lymhurst', 'Caerleon']);
+  const { list } = blackMarketOffers(index, NOW, { slowIndex, betterSells: better });
+  assert.equal(list[0][8], 900_000);
+  assert.equal(BM_CITIES[list[0][9]], 'Lymhurst');
+  assert.equal(list[0][11], 3);
+  assert.deepEqual(blackMarketGapIds(list), []);
 });
 
 test('vuelta rápida: las órdenes del Mercado Negro que más pagan, sin repetir, solo del catálogo y con tope', () => {
