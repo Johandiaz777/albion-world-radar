@@ -31,15 +31,18 @@ async function exists(path) {
   }
 }
 
-/** 'ok' | 'missing' (el render no tiene ese ícono) | 'failed' (red). */
+/** 'ok' | 'missing' (el render no tiene ese ícono) | 'failed <motivo>' (red; el motivo del último intento va
+ * al reporte: auditoría p86 I1). */
 async function fetchIcon(id) {
   const file = join(OUT, `${id}.png`);
   if (await exists(file)) return 'ok';
+  let reason = '';
   const url = `https://render.albiononline.com/v1/item/${encodeURIComponent(id)}.png?quality=1&size=128`;
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     try {
       const res = await fetch(url, { headers: HEADERS, signal: AbortSignal.timeout(TIMEOUT_MS) });
       if (res.status === 404) return 'missing';
+      reason = `HTTP ${res.status} ${res.headers.get('content-type') ?? ''}`.trim();
       if (res.ok && (res.headers.get('content-type') ?? '').startsWith('image/png')) {
         const buf = Buffer.from(await res.arrayBuffer());
         // Firma PNG: nunca publicar una página de error con extensión .png.
@@ -47,13 +50,15 @@ async function fetchIcon(id) {
           await writeFile(file, buf);
           return 'ok';
         }
+        reason = 'no es un PNG';
       }
-    } catch {
-      /* red: se reintenta */
+    } catch (err) {
+      reason = err?.name === 'TimeoutError' ? 'tiempo agotado' : String(err?.message ?? err); // red: se reintenta
     }
-    await sleep(1000 * 2 ** attempt);
+    // Sin espera después del último intento (antes dormía 16 s por cada ícono fallido).
+    if (attempt < ATTEMPTS) await sleep(1000 * 2 ** attempt);
   }
-  return 'failed';
+  return `failed ${reason}`;
 }
 
 const catalog = JSON.parse(await readFile(new URL('./catalog.json', import.meta.url), 'utf8'));
@@ -69,8 +74,10 @@ await Promise.all(
     while (next < ids.length) {
       const id = ids[next++];
       const result = await fetchIcon(id);
-      counts[result]++;
-      if (result !== 'ok') failed.push(`${result} ${id}`);
+      const kind = result.startsWith('failed') ? 'failed' : result;
+      counts[kind]++;
+      if (kind === 'missing') failed.push(`missing ${id}`);
+      else if (kind === 'failed') failed.push(`failed ${id} (${result.slice(7) || 'sin motivo'})`);
       const done = counts.ok + counts.missing + counts.failed;
       if (done % 500 === 0) console.log(`${done}/${ids.length} (${Math.round((Date.now() - started) / 1000)} s)`);
     }

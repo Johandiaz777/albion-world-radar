@@ -355,6 +355,10 @@ async function scanRegion(region) {
     breed: breed.list,
     make: make.list,
   };
+  // Auditoría p86 R5: todo lo que se calcula va ANTES de la primera escritura, así un fallo de cálculo no deja
+  // los 5 archivos de la región mezclados (unos nuevos y otros de la vuelta anterior).
+  const cityTop = cityTopSellers(index, statsOf, CITIES);
+  const values = itemValues(ids, avgOf(0), index, CITIES);
   const bytes = writeJson(path.join(OUT, `${region}.json`), payload);
   // Resumen para la pantalla del Radar: lo mejor de cada tarjeta (~3 KB). La lista completa solo se
   // baja al tocar "Ver más" o "Cayó fuerte".
@@ -391,11 +395,10 @@ async function scanRegion(region) {
     kind: 'cities',
     region,
     generatedAt: payload.generatedAt,
-    top: cityTopSellers(index, statsOf, CITIES),
+    top: cityTop,
   });
   // Valor de mercado por ítem (para estimar el botín de cada kill en el scraper de kills y en la
   // app): mediana entre ciudades del promedio de 30 días; si no hay, mediana de la venta fresca.
-  const values = itemValues(ids, avgOf(0), index, CITIES);
   writeJson(path.join(OUT, `values-${region}.json`), { v: 1, region, generatedAt: payload.generatedAt, p: values });
   const status = {
     ok: true,
