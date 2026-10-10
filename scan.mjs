@@ -27,6 +27,7 @@ import { CITIES, HOSTS, createClient } from './lib/aodp.mjs';
 import {
   BM_CITIES,
   betterQualitySells,
+  blackMarketSold,
   keepMissingRows,
   blackMarketGapIds,
   blackMarketOffers,
@@ -173,6 +174,59 @@ async function refreshAverages(client, state, log) {
   return { refreshed: pending.length, coverage: newCoverage };
 }
 
+/** Días de historial del Mercado Negro por pedido (los 7 de `volume7` + el borde de AODP). */
+const BM_SOLD_DAYS = 8;
+/** Ids por corrida mientras falte cobertura (~30 pedidos por región, una sola vez). */
+const BM_SOLD_BOOTSTRAP = 1500;
+
+/**
+ * Lo que los jugadores le venden al Mercado Negro (parte 92 de la app): unidades de 7 días de TODAS las
+ * calidades de cada ítem que hoy tiene orden de compra en el Mercado Negro. Va en rotación aparte, igual que
+ * los promedios: cada id se pide una vez por día (~6.000 ids en Europa → ~2-3 pedidos por corrida de 30 min,
+ * solo la ubicación Mercado Negro). Estado: `bmSold` = { id: [unidades7, día del pedido] }.
+ */
+async function refreshBlackMarketSold(client, state, rows, log) {
+  const day = today();
+  const known = new Set(ids);
+  const bmIds = [...new Set(rows.filter((r) => r && r.city === 'Black Market' && r.quality === 1 && r.buy_price_max > 0 && known.has(r.item_id)).map((r) => r.item_id))].sort();
+  state.bmSold ??= {};
+  const isFresh = (id) => day - (state.bmSold[id]?.[1] ?? -999) <= 1;
+  const coverage = bmIds.length ? bmIds.filter(isFresh).length / bmIds.length : 1;
+  const slice = coverage < 0.9 ? BM_SOLD_BOOTSTRAP : Math.ceil(bmIds.length / RUNS_PER_DAY) + 10;
+  const pending = [];
+  const cursor = (state.bmCursor ?? 0) % Math.max(1, bmIds.length);
+  for (let k = 0; k < bmIds.length && pending.length < slice; k++) {
+    const id = bmIds[(cursor + k) % bmIds.length];
+    if (day - (state.bmSold[id]?.[1] ?? -999) >= 1) pending.push(id);
+  }
+  state.bmCursor = (cursor + slice) % Math.max(1, bmIds.length);
+  // Limpieza: ids fuera del catálogo y datos vencidos (mismo tope que los promedios).
+  for (const id of Object.keys(state.bmSold)) {
+    if (!known.has(id) || day - state.bmSold[id][1] > AVG_MAX_AGE_DAYS) delete state.bmSold[id];
+  }
+  if (!pending.length) return { refreshed: 0, coverage };
+  let series;
+  try {
+    series = await client.history(pending, BM_SOLD_DAYS, { places: ['Black Market'], qualities: [1, 2, 3, 4, 5] });
+  } catch (err) {
+    log(`vendidas al Mercado Negro: ${err.message} (se reintenta en la próxima corrida)`);
+    return { refreshed: 0, coverage };
+  }
+  const sold = blackMarketSold(series, Date.now());
+  for (const id of pending) state.bmSold[id] = [sold.get(id) ?? 0, day];
+  return { refreshed: pending.length, coverage: bmIds.length ? bmIds.filter(isFresh).length / bmIds.length : 1 };
+}
+
+/** Unidades vendidas al Mercado Negro vigentes (≤3 días), solo las > 0. */
+function blackMarketSoldMap(state) {
+  const day = today();
+  const out = new Map();
+  for (const [id, entry] of Object.entries(state.bmSold ?? {})) {
+    if (Array.isArray(entry) && entry[0] > 0 && day - entry[1] <= AVG_MAX_AGE_DAYS) out.set(id, entry[0]);
+  }
+  return out;
+}
+
 /** Fila compacta que se guarda para la vuelta rápida (solo lo que usa `indexPrices`). */
 const compactRow = (r) => ({
   item_id: r.item_id,
@@ -234,6 +288,7 @@ async function scanRegion(region) {
   let failedChunks;
   let quickIds = 0;
   let averages = { refreshed: 0, coverage: 0 };
+  let bmSold = { refreshed: 0, coverage: 0 };
   let closedDays = 0;
   let listingFiles = 0;
   if (QUICK) {
@@ -267,6 +322,7 @@ async function scanRegion(region) {
       rows = rows.concat(kept);
     }
     averages = await refreshAverages(client, state, log);
+    bmSold = await refreshBlackMarketSold(client, state, rows, log);
     closedDays = flushClosedDays(region, state);
     if (closedDays) log(`historial diario: ${closedDays} día(s) cerrado(s)`);
     // Precios publicados: solo lo que llegó en esta vuelta (no las filas conservadas de la tabla anterior).
@@ -332,7 +388,7 @@ async function scanRegion(region) {
     writeJson(betterFile, { v: 1, at: new Date().toISOString(), rows: betterRows });
   }
   const betterSells = betterQualitySells(betterRows, now, { avg30 });
-  const blackMarket = blackMarketOffers(index, now, { slowIndex, avg30, betterSells });
+  const blackMarket = blackMarketOffers(index, now, { slowIndex, avg30, betterSells, sold: blackMarketSoldMap(state) });
 
   const payload = {
     v: 2,
@@ -413,6 +469,8 @@ async function scanRegion(region) {
     freshItems: [...index.values()].filter((e) => e.sells.length || e.buys.length).length,
     averageCoverage: Math.round(averages.coverage * 1000) / 10,
     averagesRefreshed: averages.refreshed,
+    blackMarketSoldCoverage: Math.round(bmSold.coverage * 1000) / 10,
+    blackMarketSoldRefreshed: bmSold.refreshed,
     mode: QUICK ? 'quick' : 'full',
     quickIds,
     candidates: { transport: transport.candidates, market: market.candidates, drops7: drops7.candidates, drops90: drops90.candidates, drops180: drops180.candidates, trends: trends.candidates, mostTraded: traded.candidates, craft: craft.candidates, refine: refine.candidates, farm: farm.candidates, breed: breed.candidates, make: make.candidates, blackMarket: blackMarket.candidates },

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { chunkByLength } from '../lib/aodp.mjs';
-import { BM_CITIES, betterQualitySells, keepMissingRows, blackMarketGapIds, blackMarketOffers, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
+import { BM_CITIES, betterQualitySells, keepMissingRows, blackMarketGapIds, blackMarketOffers, blackMarketSold, cityTopSellers, craftDeals, quickBlackMarketIds, indexPrices, marketDeals, refineDeals, robustAverage, SLOW_MAX_AGE_MS, transportRoutes } from '../lib/analyze.mjs';
 import { hasConflictMarkers } from '../lib/store.mjs';
 
 const NOW = Date.parse('2026-09-29T12:00:00Z');
@@ -358,6 +358,31 @@ test('Mercado Negro: una venta de calidad mejor sirve para revender (la orden de
   assert.equal(BM_CITIES[list[0][9]], 'Lymhurst');
   assert.equal(list[0][11], 3);
   assert.deepEqual(blackMarketGapIds(list), []);
+});
+
+test('vendidas al Mercado Negro: 7 días, todas las calidades, solo la ubicación Mercado Negro', () => {
+  const day = (d) => new Date(NOW - d * 86400e3).toISOString().slice(0, 19); // formato AODP, sin Z
+  const series = [
+    { location: 'Black Market', item_id: 'T5_2H_BOW', quality: 1, data: { timestamps: [day(1), day(3), day(9)], item_count: [100, 50, 999], prices_avg: [1, 1, 1] } },
+    { location: 'Black Market', item_id: 'T5_2H_BOW', quality: 2, data: { timestamps: [day(2)], item_count: [300], prices_avg: [1] } },
+    // Otra ciudad, conteos raros y fechas rotas: no cuentan.
+    { location: 'Caerleon', item_id: 'T5_2H_BOW', quality: 1, data: { timestamps: [day(1)], item_count: [7], prices_avg: [1] } },
+    { location: 'Black Market', item_id: 'T4_BAG', quality: 1, data: { timestamps: [day(1), 'roto', day(2)], item_count: [-5, 10, Number.NaN], prices_avg: [1, 1, 1] } },
+    { location: 'Black Market', item_id: 'T4_CAPE', quality: 3, data: { timestamps: [day(1)], item_count: [0], prices_avg: [1] } },
+    null,
+    { location: 'Black Market' },
+  ];
+  const sold = blackMarketSold(series, NOW);
+  assert.deepEqual([...sold.entries()], [['T5_2H_BOW', 450]]);
+  assert.equal(blackMarketSold(undefined, NOW).size, 0);
+  // Columna 12 de la fila publicada (las versiones viejas de la app leen hasta la 11).
+  const rows = [row('T5_2H_BOW', 'Black Market', 0, 20000), row('T5_BAG', 'Black Market', 0, 3000)];
+  const { list } = blackMarketOffers(indexPrices(rows, NOW), NOW, { slowIndex: indexPrices(rows, NOW, SLOW_MAX_AGE_MS), sold });
+  assert.equal(list.length, 2);
+  assert.equal(list.find((r) => r[0] === 'T5_2H_BOW')[12], 450);
+  assert.equal(list.find((r) => r[0] === 'T5_BAG')[12], 0);
+  // Sin el mapa (vuelta vieja), la columna va en 0.
+  assert.equal(blackMarketOffers(indexPrices(rows, NOW), NOW).list[0][12], 0);
 });
 
 test('vuelta rápida: las órdenes del Mercado Negro que más pagan, sin repetir, solo del catálogo y con tope', () => {
