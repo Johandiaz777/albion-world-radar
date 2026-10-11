@@ -62,7 +62,16 @@ async function fetchIcon(id) {
 }
 
 const catalog = JSON.parse(await readFile(new URL('./catalog.json', import.meta.url), 'utf8'));
-const ids = [...new Set(catalog.ids)].filter((id) => ID_RE.test(id));
+// Parte 102 de la app: el catálogo del escáner no trae las comidas y pociones encantadas (.1-.3, existen en
+// el juego salvo el pescado asado y la ensalada de algas T1) ni la piedra cruda encantada (`T4_ROCK_LEVEL1@1`
+// .. `@3`); la app sí las muestra, así que el espejo las agrega aunque el escáner no las consulte.
+const PLAIN_CONSUMABLES = new Set(['T1_MEAL_GRILLEDFISH', 'T1_MEAL_SEAWEEDSALAD']);
+const iconOnlyIds = catalog.ids.flatMap((id) => {
+  if (/^T\d_(MEAL|POTION)_[A-Z0-9_]+$/.test(id) && !PLAIN_CONSUMABLES.has(id)) return [1, 2, 3].map((n) => `${id}@${n}`);
+  if (/^T[4-8]_ROCK$/.test(id)) return [1, 2, 3].map((n) => `${id}_LEVEL${n}@${n}`);
+  return [];
+});
+const ids = [...new Set([...catalog.ids, ...iconOnlyIds])].filter((id) => ID_RE.test(id));
 await mkdir(OUT, { recursive: true });
 
 const counts = { ok: 0, missing: 0, failed: 0 };
