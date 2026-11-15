@@ -165,6 +165,17 @@ test('itemValues: mediana de promedios entre ciudades, o de la venta fresca, sin
   assert.deepEqual(out, { A: 120, B: 60 });
 });
 
+test('itemValues (chat 212): nada no comerciable y nada con un solo precio pedido', async () => {
+  const { itemValues } = await import('../lib/analyze.mjs');
+  const avg = { 'T3_VANITY_CONSUMABLE_FIREWORKS_RED_NONTRADABLE|Caerleon': 123_000_000, 'A|Caerleon': 100 };
+  const index = new Map([
+    ['TROLL', { sells: [{ sell_price_min: 999_999_999 }], buys: [] }],
+    ['T4_SKILLBOOK_GATHER_FIBER_NONTRADABLE', { sells: [{ sell_price_min: 5 }, { sell_price_min: 7 }], buys: [] }],
+  ]);
+  const ids = ['T3_VANITY_CONSUMABLE_FIREWORKS_RED_NONTRADABLE', 'TROLL', 'T4_SKILLBOOK_GATHER_FIBER_NONTRADABLE', 'A'];
+  assert.deepEqual(itemValues(ids, (id, c) => avg[`${id}|${c}`] ?? null, index, ['Caerleon', 'Martlock']), { A: 100 });
+});
+
 test('monturas y consumibles: la montura no tiene devolución; la cocina sí, y cuenta las unidades hechas', async () => {
   const { makeDeals } = await import('../lib/analyze.mjs');
   const index = indexPrices(
